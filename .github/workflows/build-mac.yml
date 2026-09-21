@@ -106,28 +106,40 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【パッチ】macOS専用の古いCarbon/Macファイルを全自動で無害化＆スタブ化
+          # 【強化パッチ】不要なMac用コードを「何もしないダミースタブ」に差し替え
           python3 -c "
-          import glob, os
+          import os
 
-          # 1. lib/mac/ 配下の不要なMac専用ソースを空のスタブにする
-          for fpath in glob.glob('lib/mac/*') + glob.glob('mac/*'):
-              if os.path.isfile(fpath):
-                  with open(fpath, 'w') as f:
-                      f.write('// empty stub for iOS\n')
+          dummy_c_code = '''
+          #include <stdio.h>
+          #include <stdlib.h>
+          extern \"C\" {
+              void PrintBacktrace(void) {}
+              int callPosixSpawn(const char* cmd) { return -1; }
+              int compareOSVersionTo(int major, int minor, int bugFix) { return 0; }
+          }
+          '''
 
-          # 2. 全ファイルから iOS非対応ヘッダーを抹消
-          for pattern in ['lib/*.h', 'lib/*.cpp', 'api/*.h', 'api/*.cpp', 'lib/*/*.h', 'lib/*/*.cpp']:
-              for fpath in glob.glob(pattern):
-                  if not os.path.isfile(fpath): continue
-                  with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                      content = f.read()
-                  content = content.replace('#include <Carbon/', '// #include <Carbon/')
-                  content = content.replace('#include <CoreServices/', '// #include <CoreServices/')
-                  content = content.replace('#include <IOKit/', '// #include <IOKit/')
-                  content = content.replace('NXEventHandle', 'void*')
-                  with open(fpath, 'w', encoding='utf-8') as f:
-                      f.write(content)
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  fpath = os.path.join(root, file)
+                  # mac/ 配下のファイルをダミースタブに差し替え
+                  if '/mac/' in fpath or fpath.startswith('./mac/'):
+                      if file.endswith(('.cpp', '.c', '.m', '.mm')):
+                          with open(fpath, 'w') as f:
+                              f.write(dummy_c_code)
+                      elif file.endswith('.h'):
+                          with open(fpath, 'w') as f:
+                              f.write('// empty header\n')
+                  elif file.endswith(('.cpp', '.c', '.h')):
+                      with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                          c = f.read()
+                      c = c.replace('#include <Carbon/', '// #include <Carbon/')
+                      c = c.replace('#include <CoreServices/', '// #include <CoreServices/')
+                      c = c.replace('#include <IOKit/', '// #include <IOKit/')
+                      c = c.replace('NXEventHandle', 'void*')
+                      with open(fpath, 'w', encoding='utf-8') as f:
+                          f.write(c)
           "
 
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
