@@ -15,7 +15,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # BOINCビルドに必要な autoconf 等と OpenMP を導入
           brew install libomp cmake autoconf automake libtool
 
       - name: Configure Git for Legacy Submodules
@@ -30,10 +29,16 @@ jobs:
         run: |
           cd source/boinc/boinc
           
-          # ビルドスクリプトの生成
+          # 【脳内シミュレーション対策】
+          # 1. macOS特有の glibtoolize を環境変数で明示
+          export LIBTOOLIZE=glibtoolize
+          # 2. GNUツール群のプレフィックスなしパスを最優先に通す
+          export PATH="/opt/homebrew/opt/libtool/libexec/gnubin:$PATH"
+
+          # スクリプト生成
           ./_autosetup
           
-          # GUIやデーモンは不要。純粋なライブラリ（libboinc.a, libboinc_api.a）だけをARM64で構成
+          # 最小限のライブラリ構成（警告で止まらないようにフラグを保護）
           ./configure \
             --disable-server \
             --disable-client \
@@ -42,12 +47,12 @@ jobs:
             --enable-boinczip \
             --disable-shared \
             --enable-static \
-            CFLAGS="-O3 -arch arm64" \
-            CXXFLAGS="-O3 -arch arm64"
+            CFLAGS="-O3 -arch arm64 -Wno-error" \
+            CXXFLAGS="-O3 -arch arm64 -Wno-error"
           
           # 並列ビルド
           make -j$(sysctl -n hw.ncpu)
           
-          # 成果物の存在確認
-          echo "=== Built Libraries ==="
+          # 成果物の確認（これが通ればBOINCライブラリは完全制覇）
+          echo "=== Successfully Built BOINC Libraries ==="
           ls -lh lib/.libs/libboinc.a api/.libs/libboinc_api.a || ls -lh lib/libboinc.a api/libboinc_api.a
