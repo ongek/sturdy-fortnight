@@ -54,15 +54,16 @@ jobs:
           # 1. CMake 4.x の足切り回避
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
 
-          # 2. 【化石トラップ撃破】SpecialLibs.cmake の古いOS X SDK判定のFATALエラーを無力化
+          # 2. 古いOS X SDK判定のFATALエラーを無力化
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
           mkdir -p build && cd build
 
-          # 最新SDKのパスを取得
           SYSROOT=$(xcrun --show-sdk-path)
 
-          # 3. OpenMPポリシーとM4フラグ、正しいSDKパスを注入
+          # 3. 古いCコードを最新Clangで通すための救済フラグをまとめて注入
+          CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
+
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
@@ -80,28 +81,24 @@ jobs:
             -DOpenMP_CXX_LIB_NAMES="omp" \
             -DOpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include" \
-            -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include"
+            -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
+
       - name: Compile & Link N-body
         run: |
           cd source/build
 
-          # 1. 警告で止まらないよう、念のため全CMakeListsから -Werror を抹消
-          find .. -name "CMakeLists.txt" -exec sed -i '' 's/-Werror//g' {} + 2>/dev/null || true
-
-          # 2. macOSリンカーが死ぬ -static フラグを除去
+          # macOSリンカーが死ぬ -static フラグを除去
           find . -name "link.txt" -exec sed -i '' 's/-static//g' {} + 2>/dev/null || true
 
-          # 3. まず並列ビルドを試み、失敗した場合はシングルスレッドで詳細エラーを直撃表示
+          # 並列ビルド
           make -j$(sysctl -n hw.ncpu) || {
-            echo "========================================================"
-            echo "=== BUILD FAILED: Capturing the exact error with VERBOSE=1 ==="
-            echo "========================================================"
+            echo "=== FAILED: Retrying with VERBOSE=1 ==="
             make VERBOSE=1
           }
 
           echo "=== Built Binaries ==="
-          ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway*
+          ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway* || true
 
       - name: Upload Native Binary
         uses: actions/upload-artifact@v4
