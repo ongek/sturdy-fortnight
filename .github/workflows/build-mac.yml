@@ -1,7 +1,8 @@
 name: Build MilkyWay macOS Native
 
 on:
-  workflow_dispatch:
+  push:               # プッシュで自動実行
+  workflow_dispatch:  # 手動ボタンも一応残しておく
 
 jobs:
   build-test:
@@ -28,31 +29,33 @@ jobs:
       - name: Build BOINC Libraries (arm64)
         run: |
           cd source/boinc/boinc
-          
-          # 【脳内シミュレーション対策】
-          # 1. macOS特有の glibtoolize を環境変数で明示
-          export LIBTOOLIZE=glibtoolize
-          # 2. GNUツール群のプレフィックスなしパスを最優先に通す
-          export PATH="/opt/homebrew/opt/libtool/libexec/gnubin:$PATH"
 
-          # スクリプト生成
+          # 1. libtoolize の物理シンボリックリンクを作成して PATH に通す
+          mkdir -p "$HOME/bin"
+          ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
+          export PATH="$HOME/bin:$PATH"
+
+          # 動作確認（これで libtoolize が確実に認識される）
+          which libtoolize
+
+          # 2. ビルドスクリプトの生成
           ./_autosetup
-          
-          # 最小限のライブラリ構成（警告で止まらないようにフラグを保護）
+
+          # 3. ライブラリのみの構成
           ./configure \
             --disable-server \
             --disable-client \
             --disable-manager \
             --enable-libraries \
-            --enable-boinczip \
             --disable-shared \
             --enable-static \
             CFLAGS="-O3 -arch arm64 -Wno-error" \
             CXXFLAGS="-O3 -arch arm64 -Wno-error"
-          
-          # 並列ビルド
-          make -j$(sysctl -n hw.ncpu)
-          
-          # 成果物の確認（これが通ればBOINCライブラリは完全制覇）
+
+          # 4. 余計なエラーを避けるため lib と api のみピンポイント並列ビルド
+          make -C lib -j$(sysctl -n hw.ncpu)
+          make -C api -j$(sysctl -n hw.ncpu)
+
+          # 5. 成果物の存在確認
           echo "=== Successfully Built BOINC Libraries ==="
-          ls -lh lib/.libs/libboinc.a api/.libs/libboinc_api.a || ls -lh lib/libboinc.a api/libboinc_api.a
+          ls -lh lib/libboinc.a api/libboinc_api.a
