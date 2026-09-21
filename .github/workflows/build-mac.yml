@@ -1,18 +1,18 @@
-name: Build MilkyWay macOS Native
+name: Build MilkyWay A17 Pro iOS Native
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  build-test:
+  build-a17pro:
     runs-on: macos-26
     steps:
       - name: Show System Info & Clang Version
         run: |
           uname -a
-          arch
           clang --version
+          xcrun --sdk iphoneos --show-sdk-path
 
       - name: Install Dependencies
         run: |
@@ -26,52 +26,48 @@ jobs:
         run: |
           git clone --depth 1 --recurse-submodules https://github.com/Milkyway-at-home/milkywayathome_client.git source
 
-      - name: Build BOINC Libraries (arm64)
+      - name: Build BOINC Libraries (iOS arm64)
         run: |
           cd source/boinc/boinc
           mkdir -p "$HOME/bin"
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
+          # iOS SDKのパスを取得
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+
           ./_autosetup
           ./configure \
+            --host=arm-apple-darwin \
             --disable-server \
             --disable-client \
             --disable-manager \
             --enable-libraries \
             --disable-shared \
             --enable-static \
-            CFLAGS="-O3 -arch arm64 -flto=thin -Wno-error" \
-            CXXFLAGS="-O3 -arch arm64 -flto=thin -Wno-error"
+            CFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error" \
+            CXXFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error"
 
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure & Patch MilkyWay CMake (M4 E-Core Specialized)
+      - name: Configure & Patch MilkyWay CMake (A17 Pro Extreme)
         run: |
           cd source
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
           mkdir -p build && cd build
-          SYSROOT=$(xcrun --show-sdk-path)
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
 
-          # 【Eコア専用調律フラグ】
-          # 1. -mcpu=apple-m4: M4命令セット（ARMv9）をフル活用
-          # 2. -flto=thin: リンク時最適化
-          # 3. -falign-functions=128: 128バイトキャッシュライン整列
-          # 4. -mllvm -inline-threshold=350: L1i(128KB)にジャストフィットさせる上品なインライン化
-          # 5. -ffp-contract=fast: NEONポートでのFMA積和演算を解放
-          # 6. -fno-math-errno: 数学関数のインライン化促進
-          # ※過剰な -funroll-loops は意図的に除外（EコアのROB詰まり防止）
-          ECORE_OPT="-O3 -mcpu=apple-m4 -flto=thin -falign-functions=128 -mllvm -inline-threshold=350 -ffp-contract=fast -fno-math-errno -mmacosx-version-min=15.0"
+          # 【A17 Pro 全力最適化フラグ】
+          A17_OPT="-O3 -mcpu=apple-a17 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -ffp-contract=fast -fno-math-errno"
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
-            -DCMAKE_OSX_SYSROOT="$SYSROOT" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="15.0" \
+            -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
             -DBOINC_DIR=../boinc/boinc \
             -DBOINC_APPLICATION=ON \
             -DNBODY=ON \
@@ -80,10 +76,10 @@ jobs:
             -DNBODY_GL=OFF \
             -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$ECORE_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$ECORE_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$A17_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A17_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
 
-      - name: Compile & Link N-body (Static libomp & E-Core Tuned)
+      - name: Compile & Link N-body for A17 Pro
         run: |
           cd source/build
 
@@ -91,32 +87,27 @@ jobs:
 
           TARGET_LINK="nbody/CMakeFiles/milkyway_nbody.dir/link.txt"
           if [ -f "$TARGET_LINK" ]; then
-            echo "=== Patching $TARGET_LINK for E-Core ==="
+            echo "=== Patching $TARGET_LINK for A17 Pro iOS ==="
             sed -i '' 's/-Wl,--start-group//g; s/-Wl,--end-group//g; s/--start-group//g; s/--end-group//g' "$TARGET_LINK"
             sed -i '' 's/-libstdc++//g; s/-static//g' "$TARGET_LINK"
-            sed -i '' 's/-mmacosx-version-min=[0-9.]*/-mmacosx-version-min=15.0/g' "$TARGET_LINK"
             
-            # dylibの代わりに「静的ライブラリ（libomp.a）」を直接結合！
-            # これにより間接参照テーブル（PLT/GOT）を排除し、Eコアの分岐ミスを極小化
+            # iOS SDKと静的libomp.aを結合
+            IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+            sed -i '' "s|-isysroot [^ ]*|-isysroot $IOS_SDK -target arm64-apple-ios16.0|g" "$TARGET_LINK"
             sed -i '' 's|$| -flto=thin /opt/homebrew/opt/libomp/lib/libomp.a|' "$TARGET_LINK"
 
-            echo "=== Executing E-Core Link Command ==="
+            echo "=== Executing A17 Pro Link Command ==="
             (cd nbody && bash -c "$(cat CMakeFiles/milkyway_nbody.dir/link.txt)")
           fi
 
-          echo "=== Built Binaries ==="
+          echo "=== Built A17 Pro Binaries ==="
           ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway* || true
-          file bin/milkyway_nbody || file nbody/milkyway_nbody || true
+          file bin/milkyway_nbody || true
 
-          # 依存関係の確認（libomp.dylib が消えて完全自己完結しているか確認）
-          echo "=== Dynamic Library Dependencies ==="
-          otool -L bin/milkyway_nbody || true
-
-      - name: Upload E-Core Binary
+      - name: Upload A17 Pro Binary
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: milkyway_nbody_m4_ecore
+          name: milkyway_nbody_a17pro
           path: |
-            source/build/bin/
-            source/build/nbody/
+            source/build/bin/milkyway_nbody
