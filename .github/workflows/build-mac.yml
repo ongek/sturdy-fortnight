@@ -33,9 +33,8 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【パッチ①】iOSに存在しないmacOS専用ヘッダーを無効化
-          sed -i '' 's|#include <IOKit/hidsystem/IOHIDLib.h>|// #include <IOKit/hidsystem/IOHIDLib.h>|g' lib/hostinfo.h
-          sed -i '' 's|#include <IOKit/IOKitLib.h>|// #include <IOKit/IOKitLib.h>|g' lib/hostinfo.h
+          # 【パッチ①】iOSに存在しないIOKit関連ヘッダーを一網打尽に全行コメントアウト
+          find lib api -type f \( -name "*.h" -o -name "*.cpp" \) -exec sed -i '' 's|#include <IOKit/.*|// #include <IOKit/...>|g' {} +
 
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
