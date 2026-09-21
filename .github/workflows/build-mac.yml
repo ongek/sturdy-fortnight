@@ -33,19 +33,21 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【最終解決パッチ】型完全一致によるprocinfoの正常通過
+          # 【リンケージ整合パッチ】callPosixSpawnをC++リンケージとして定義！
           python3 -c "
           import os
 
-          # 1. mac/ 配下の実装コード(.c, .cpp, .m, .mm)をC/C++両対応スタブ化
           dummy_code = '''
           #include <stdio.h>
           #include <stdlib.h>
+
+          // C++ リンケージ（filesys.cppの要求と完全一致）
+          int callPosixSpawn(const char* cmd) { (void)cmd; return -1; }
+
           #ifdef __cplusplus
           extern \"C\" {
           #endif
               void PrintBacktrace(void) {}
-              int callPosixSpawn(const char* cmd) { (void)cmd; return -1; }
               int compareOSVersionTo(int major, int minor, int bugFix) { 
                   (void)major; (void)minor; (void)bugFix; return 0; 
               }
@@ -62,22 +64,17 @@ jobs:
                           with open(fpath, 'w', encoding='utf-8') as f:
                               f.write(dummy_code)
 
-          # 2. procinfo_mac.cpp の末尾に、公式ヘッダー(mac_branding.h)と完全一致する型で実体を注入
           if os.path.exists('lib/procinfo_mac.cpp'):
               with open('lib/procinfo_mac.cpp', 'a', encoding='utf-8') as f:
                   f.write('\nchar *brandName[5] = {(char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\"};\n')
-              print('Successfully appended matching brandName definition to lib/procinfo_mac.cpp')
 
-          # 3. PrintBacktrace の呼出だけをピンポイントで無力化
           if os.path.exists('lib/diagnostics.cpp'):
               with open('lib/diagnostics.cpp', 'r', encoding='utf-8', errors='ignore') as f:
                   d_content = f.read()
               d_content = d_content.replace('PrintBacktrace();', '// PrintBacktrace();')
               with open('lib/diagnostics.cpp', 'w', encoding='utf-8') as f:
                   f.write(d_content)
-              print('Successfully neutralized PrintBacktrace in lib/diagnostics.cpp')
 
-          # 4. iOS SDKに存在しないmacOSフレームワーク参照を無害化
           for root, dirs, files in os.walk('.'):
               for file in files:
                   if file.endswith(('.cpp', '.c', '.h')):
@@ -109,13 +106,13 @@ jobs:
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure MilkyWay CMake (A17 Pro iOS Native)
+      - name: Configure MilkyWay CMake for dylib (A17 Pro iOS Native)
         run: |
           cd source
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
-          # 【iOS対策】Luaのos.execute()内のsystem()呼出を-1に無害化
+          # 1. Lua の system() 呼出を無害化
           python3 -c "
           import os
           fpath = 'lua/src/loslib.c'
@@ -125,14 +122,30 @@ jobs:
               c = c.replace('system(luaL_optstring(L, 1, NULL))', '-1')
               with open(fpath, 'w', encoding='utf-8') as f:
                   f.write(c)
-              print('Successfully neutralized system() in lua loslib.c')
+          "
+
+          # 2. ★CMakeを「実行ファイル(add_executable)」から「正規のdylib(add_library SHARED)」に外科手術！
+          sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' nbody/CMakeLists.txt
+          sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' nbody/CMakeLists.txt
+
+          # 3. ★main関数をiOSアプリから直接呼べる「milkyway_nbody_entry」にリネーム
+          python3 -c "
+          import os
+          mpath = 'nbody/src/main.c'
+          if os.path.exists(mpath):
+              with open(mpath, 'r', encoding='utf-8', errors='ignore') as f:
+                  c = f.read()
+              c = c.replace('int main(int argc, char **argv)', '__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)')
+              c = c.replace('int main(int argc, char *argv[])', '__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)')
+              with open(mpath, 'w', encoding='utf-8') as f:
+                  f.write(c)
+              print('Successfully renamed main() to exported milkyway_nbody_entry()')
           "
 
           mkdir -p build && cd build
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
 
-          # 【A17 Pro 全力最適化フラグ (シングルスレッド高密度版)】
           A17_OPT="-O3 -mcpu=apple-a17 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -ffp-contract=fast -fno-math-errno"
 
           cmake .. \
@@ -148,30 +161,27 @@ jobs:
             -DCMAKE_C_FLAGS="$A17_OPT $CLANG_PERMISSIVE" \
             -DCMAKE_CXX_FLAGS="$A17_OPT $CLANG_PERMISSIVE"
 
-      - name: Build MilkyWay N-Body (with Linker Sanitization)
+      - name: Build MilkyWay N-Body dylib
         run: |
           cd source/build
 
-          # 【地雷7 外科手術 ＆ dylib化】makeを叩く「前」に link.txt を調律する！
+          # 不要なLinuxリンカーオプションの除去
           find . -name "link.txt" | while read -r linkfile; do
-            # 1. 不要なLinux専用オプションを根絶
             sed -i '' 's/-Wl,--start-group//g' "$linkfile"
             sed -i '' 's/-Wl,--end-group//g' "$linkfile"
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
-            
-            # 2. ★ここで実行ファイルから「正規のdylib」に変換！
-            sed -i '' 's/-o \.\.\/bin\/milkyway_nbody/-dynamiclib -install_name @rpath\/milkyway_nbody.dylib -o \.\.\/bin\/milkyway_nbody.dylib/g' "$linkfile"
           done
 
-          # 【ビルド実行】調律された link.txt で本物のdylibを生成
+          # ビルド実行
           make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
 
-          # 生成されたdylibの身分証（LC_ID_DYLIB）と依存関係を確認
-          echo "=== Built Binary Info ==="
-          ls -lh bin/milkyway_nbody.dylib
-          file bin/milkyway_nbody.dylib
-          otool -L bin/milkyway_nbody.dylib
+          echo "=== Built dylib Info ==="
+          DYLIB_FILE=$(find . -name "*milkyway_nbody*.dylib" | head -n 1)
+          ls -lh "$DYLIB_FILE"
+          file "$DYLIB_FILE"
+          otool -L "$DYLIB_FILE"
+          nm -gU "$DYLIB_FILE" | grep milkyway_nbody_entry || true
 
       - name: Upload A17 Pro dylib
         uses: actions/upload-artifact@v4
@@ -179,4 +189,4 @@ jobs:
         with:
           name: milkyway_nbody_a17pro_dylib
           path: |
-            source/build/bin/milkyway_nbody.dylib
+            source/build/**/*milkyway_nbody*.dylib
