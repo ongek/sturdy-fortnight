@@ -33,17 +33,27 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【パッチ①＆②】Pythonで確実にIOKitとNXEventHandleを一括無害化
+          # 【強化パッチ】全階層の mac/ 配下を漏れなくスタブ化し、iOS非対応ヘッダーを全滅させる
           python3 -c "
-          import glob
-          for pattern in ['lib/*.h', 'lib/*.cpp', 'api/*.h', 'api/*.cpp']:
-              for fpath in glob.glob(pattern):
-                  with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                      content = f.read()
-                  content = content.replace('#include <IOKit/', '// #include <IOKit/')
-                  content = content.replace('NXEventHandle', 'void*')
-                  with open(fpath, 'w', encoding='utf-8') as f:
-                      f.write(content)
+          import os
+
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  fpath = os.path.join(root, file)
+                  # パスに '/mac/' が含まれる全ソースファイルを空のスタブにする
+                  if '/mac/' in fpath or fpath.startswith('./mac/'):
+                      if file.endswith(('.cpp', '.c', '.h', '.m', '.mm')):
+                          with open(fpath, 'w') as f:
+                              f.write('// empty stub for iOS\n')
+                  elif file.endswith(('.cpp', '.c', '.h')):
+                      with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                          c = f.read()
+                      c = c.replace('#include <Carbon/', '// #include <Carbon/')
+                      c = c.replace('#include <CoreServices/', '// #include <CoreServices/')
+                      c = c.replace('#include <IOKit/', '// #include <IOKit/')
+                      c = c.replace('NXEventHandle', 'void*')
+                      with open(fpath, 'w', encoding='utf-8') as f:
+                          f.write(c)
           "
 
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
