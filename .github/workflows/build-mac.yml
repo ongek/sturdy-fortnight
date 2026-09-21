@@ -33,37 +33,33 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【完全撃破パッチ】macOS専用の呼出・ヘッダー・関数を全方位から無力化
+          # 【最上行マクロ強制注入パッチ】
           python3 -c "
           import os
 
-          dummy_c_code = '''
-          #include <stdio.h>
-          #include <stdlib.h>
-          extern \"C\" {
-              void PrintBacktrace(void) {}
-              int callPosixSpawn(const char* cmd) { return -1; }
-              int compareOSVersionTo(int major, int minor, int bugFix) { return 0; }
+          # 1. diagnostics.cpp と filesys.cpp の1行目にマクロを強制注入
+          patches = {
+              'lib/diagnostics.cpp': '#define PrintBacktrace() ((void)0)\n',
+              'lib/filesys.cpp': '#define callPosixSpawn(x) (-1)\n'
           }
-          '''
 
+          for rel_path, macro in patches.items():
+              if os.path.exists(rel_path):
+                  with open(rel_path, 'r', encoding='utf-8', errors='ignore') as f:
+                      content = f.read()
+                  with open(rel_path, 'w', encoding='utf-8') as f:
+                      f.write(macro + content)
+                  print(f'Successfully injected macro into {rel_path}')
+              else:
+                  print(f'Warning: {rel_path} not found!')
+
+          # 2. 全ファイルのiOS非対応ヘッダーを安全にコメントアウト
           for root, dirs, files in os.walk('.'):
               for file in files:
-                  fpath = os.path.join(root, file)
-                  if '/mac/' in fpath or fpath.startswith('./mac/'):
-                      if file.endswith(('.cpp', '.c', '.m', '.mm')):
-                          with open(fpath, 'w') as f:
-                              f.write(dummy_c_code)
-                      elif file.endswith('.h'):
-                          with open(fpath, 'w') as f:
-                              f.write('extern \"C\" void PrintBacktrace(void);\nextern \"C\" int callPosixSpawn(const char* cmd);\n')
-                  elif file.endswith(('.cpp', '.c', '.h')):
+                  if file.endswith(('.cpp', '.c', '.h')):
+                      fpath = os.path.join(root, file)
                       with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
                           c = f.read()
-                      # 未定義関数呼び出しを直接無害化
-                      c = c.replace('PrintBacktrace();', '// PrintBacktrace();')
-                      c = c.replace('retval = callPosixSpawn(buf);', 'retval = -1;')
-                      # iOS SDKに存在しないmacOSフレームワーク参照を無効化
                       c = c.replace('#include <Carbon/', '// #include <Carbon/')
                       c = c.replace('#include <CoreServices/', '// #include <CoreServices/')
                       c = c.replace('#include <IOKit/', '// #include <IOKit/')
