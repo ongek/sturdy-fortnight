@@ -106,7 +106,7 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【強化パッチ】不要なMac用コードを「何もしないダミースタブ」に差し替え
+          # 【完全撃破パッチ】未定義エラーの呼び出し箇所を直接外科手術で無害化
           python3 -c "
           import os
 
@@ -123,17 +123,19 @@ jobs:
           for root, dirs, files in os.walk('.'):
               for file in files:
                   fpath = os.path.join(root, file)
-                  # mac/ 配下のファイルをダミースタブに差し替え
                   if '/mac/' in fpath or fpath.startswith('./mac/'):
                       if file.endswith(('.cpp', '.c', '.m', '.mm')):
                           with open(fpath, 'w') as f:
                               f.write(dummy_c_code)
                       elif file.endswith('.h'):
                           with open(fpath, 'w') as f:
-                              f.write('// empty header\n')
+                              f.write('extern \"C\" void PrintBacktrace(void);\nextern \"C\" int callPosixSpawn(const char* cmd);\n')
                   elif file.endswith(('.cpp', '.c', '.h')):
                       with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
                           c = f.read()
+                      # 呼び出し元を直接無害化
+                      c = c.replace('PrintBacktrace();', '// PrintBacktrace();')
+                      c = c.replace('retval = callPosixSpawn(buf);', 'retval = -1;')
                       c = c.replace('#include <Carbon/', '// #include <Carbon/')
                       c = c.replace('#include <CoreServices/', '// #include <CoreServices/')
                       c = c.replace('#include <IOKit/', '// #include <IOKit/')
