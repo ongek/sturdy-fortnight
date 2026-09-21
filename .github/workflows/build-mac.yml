@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-test:
-    runs-on: macos-26  # ご指定の macOS 26 ランナー
+    runs-on: macos-26
     steps:
       - name: Show System Info & Clang Version
         run: |
@@ -51,14 +51,22 @@ jobs:
         run: |
           cd source
 
-          # 1. CMake 4.x の「古いCMake互換切り捨てエラー」をパッチで回避
+          # 1. CMake 4.x の足切り回避
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
+
+          # 2. 【化石トラップ撃破】SpecialLibs.cmake の古いOS X SDK判定のFATALエラーを無力化
+          sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
           mkdir -p build && cd build
 
-          # 2. READMEの公式フラグとM4最適化フラグを注入して構成
+          # 最新SDKのパスを取得
+          SYSROOT=$(xcrun --show-sdk-path)
+
+          # 3. OpenMPポリシーとM4フラグ、正しいSDKパスを注入
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
+            -DCMAKE_OSX_SYSROOT="$SYSROOT" \
             -DBOINC_DIR=../boinc/boinc \
             -DBOINC_APPLICATION=ON \
             -DNBODY=ON \
@@ -66,20 +74,23 @@ jobs:
             -DNBODY_OPENMP=ON \
             -DNBODY_GL=OFF \
             -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
+            -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include" \
+            -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include" \
+            -DOpenMP_C_LIB_NAMES="omp" \
+            -DOpenMP_CXX_LIB_NAMES="omp" \
+            -DOpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include" \
             -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include"
-
-          # 3. macOSリンカーが即死する「-static」指定を生成ファイルから全自動除去
-          find . -name "link.txt" -exec sed -i '' 's/-static//g' {} + 2>/dev/null || true
 
       - name: Compile & Link N-body
         run: |
           cd source/build
 
-          # 念のため再度 link.txt から -static を削ってからビルド
+          # macOSリンカーが死ぬ -static フラグを除去
           find . -name "link.txt" -exec sed -i '' 's/-static//g' {} + 2>/dev/null || true
 
+          # ビルド実行
           make -j$(sysctl -n hw.ncpu)
 
           echo "=== Built Binaries ==="
