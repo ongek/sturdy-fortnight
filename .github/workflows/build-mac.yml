@@ -16,7 +16,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          brew install libomp cmake autoconf automake libtool
+          brew install cmake autoconf automake libtool
 
       - name: Configure Git for Legacy Submodules
         run: |
@@ -33,7 +33,10 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # iOS SDKのパスを取得
+          # 【パッチ①】iOSに存在しないmacOS専用ヘッダーを無効化
+          sed -i '' 's|#include <IOKit/hidsystem/IOHIDLib.h>|// #include <IOKit/hidsystem/IOHIDLib.h>|g' lib/hostinfo.h
+          sed -i '' 's|#include <IOKit/IOKitLib.h>|// #include <IOKit/IOKitLib.h>|g' lib/hostinfo.h
+
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
           ./_autosetup
@@ -51,7 +54,7 @@ jobs:
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure & Patch MilkyWay CMake (A17 Pro Extreme)
+      - name: Configure & Patch MilkyWay CMake (A17 Pro iOS Native)
         run: |
           cd source
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
@@ -61,23 +64,21 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
 
-          # 【A17 Pro 全力最適化フラグ】
+          # 【A17 Pro 全力最適化フラグ (シングルスレッド高密度版)】
           A17_OPT="-O3 -mcpu=apple-a17 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -ffp-contract=fast -fno-math-errno"
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
             -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
             -DBOINC_DIR=../boinc/boinc \
             -DBOINC_APPLICATION=ON \
             -DNBODY=ON \
             -DSEPARATION=OFF \
-            -DNBODY_OPENMP=ON \
+            -DNBODY_OPENMP=OFF \
             -DNBODY_GL=OFF \
-            -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$A17_OPT $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A17_OPT $CLANG_PERMISSIVE"
 
       - name: Compile & Link N-body for A17 Pro
         run: |
@@ -91,10 +92,10 @@ jobs:
             sed -i '' 's/-Wl,--start-group//g; s/-Wl,--end-group//g; s/--start-group//g; s/--end-group//g' "$TARGET_LINK"
             sed -i '' 's/-libstdc++//g; s/-static//g' "$TARGET_LINK"
             
-            # iOS SDKと静的libomp.aを結合
+            # iOS SDKパスを正規化
             IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
             sed -i '' "s|-isysroot [^ ]*|-isysroot $IOS_SDK -target arm64-apple-ios16.0|g" "$TARGET_LINK"
-            sed -i '' 's|$| -flto=thin /opt/homebrew/opt/libomp/lib/libomp.a|' "$TARGET_LINK"
+            sed -i '' 's|$| -flto=thin|' "$TARGET_LINK"
 
             echo "=== Executing A17 Pro Link Command ==="
             (cd nbody && bash -c "$(cat CMakeFiles/milkyway_nbody.dir/link.txt)")
@@ -108,6 +109,6 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: milkyway_nbody_a17pro
+          name: milkyway_nbody_a17pro_ios
           path: |
             source/build/bin/milkyway_nbody
