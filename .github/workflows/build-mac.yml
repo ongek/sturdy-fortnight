@@ -152,28 +152,31 @@ jobs:
         run: |
           cd source/build
 
-          # 【地雷7 外科手術】Linux専用リンカーオプションを根絶
+          # 【地雷7 外科手術 ＆ dylib化】makeを叩く「前」に link.txt を調律する！
           find . -name "link.txt" | while read -r linkfile; do
+            # 1. 不要なLinux専用オプションを根絶
             sed -i '' 's/-Wl,--start-group//g' "$linkfile"
             sed -i '' 's/-Wl,--end-group//g' "$linkfile"
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
+            
+            # 2. ★ここで実行ファイルから「正規のdylib」に変換！
+            sed -i '' 's/-o \.\.\/bin\/milkyway_nbody/-dynamiclib -install_name @rpath\/milkyway_nbody.dylib -o \.\.\/bin\/milkyway_nbody.dylib/g' "$linkfile"
           done
 
-          # 【エラー炙り出しビルド】
-          # 並列で進められる所まで進め、エラーが出た場合は1スレッドで詳細エラーを直撃表示して停止する
+          # 【ビルド実行】調律された link.txt で本物のdylibを生成
           make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
 
-          # バイナリのアーキテクチャ・署名・依存関係チェック
+          # 生成されたdylibの身分証（LC_ID_DYLIB）と依存関係を確認
           echo "=== Built Binary Info ==="
-          ls -lh bin/milkyway_nbody
-          file bin/milkyway_nbody
-          otool -L bin/milkyway_nbody
+          ls -lh bin/milkyway_nbody.dylib
+          file bin/milkyway_nbody.dylib
+          otool -L bin/milkyway_nbody.dylib
 
-      - name: Upload A17 Pro Binary
+      - name: Upload A17 Pro dylib
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: milkyway_nbody_a17pro_ios
+          name: milkyway_nbody_a17pro_dylib
           path: |
-            source/build/bin/milkyway_nbody
+            source/build/bin/milkyway_nbody.dylib
