@@ -50,18 +50,11 @@ jobs:
       - name: Configure & Patch MilkyWay CMake (M4 Optimized)
         run: |
           cd source
-
-          # 1. CMake 4.x の足切り回避
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
-
-          # 2. 古いOS X SDK判定のFATALエラーを無力化
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
           mkdir -p build && cd build
-
           SYSROOT=$(xcrun --show-sdk-path)
-
-          # 3. 古いCコードを最新Clangで通すための救済フラグをまとめて注入
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
 
           cmake .. \
@@ -84,27 +77,43 @@ jobs:
             -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
             -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
 
-      - name: Compile & Link N-body
+      - name: Compile & Link N-body (with link.txt Surgery)
         run: |
           cd source/build
 
-          # macOSリンカーが死ぬ -static フラグを除去
-          find . -name "link.txt" -exec sed -i '' 's/-static//g' {} + 2>/dev/null || true
+          # 1. コンパイル実行（98%まで進める）
+          make -j$(sysctl -n hw.ncpu) || true
 
-          # 並列ビルド
-          make -j$(sysctl -n hw.ncpu) || {
-            echo "=== FAILED: Retrying with VERBOSE=1 ==="
-            make VERBOSE=1
-          }
+          # 2. 【外科手術】生成された link.txt から macOS非互換オプションを完全除去
+          TARGET_LINK="nbody/CMakeFiles/milkyway_nbody.dir/link.txt"
+          if [ -f "$TARGET_LINK" ]; then
+            echo "=== Patching $TARGET_LINK ==="
+            # Linux専用の start-group / end-group を消去
+            sed -i '' 's/-Wl,--start-group//g; s/-Wl,--end-group//g; s/--start-group//g; s/--end-group//g' "$TARGET_LINK"
+            # 存在しない libstdc++ / static フラグを消去
+            sed -i '' 's/-libstdc++//g; s/-static//g' "$TARGET_LINK"
+            # OpenMPライブラリ（-lomp）を末尾に確実に注入
+            sed -i '' 's|$| -L/opt/homebrew/opt/libomp/lib -lomp|' "$TARGET_LINK"
+            
+            echo "Patched link command:"
+            cat "$TARGET_LINK"
+            echo ""
+            
+            # 3. 調律したリンクコマンドを直接実行！
+            echo "=== Executing Patched Link Command ==="
+            (cd nbody && bash -c "$(cat CMakeFiles/milkyway_nbody.dir/link.txt)")
+          fi
 
+          # 4. 最終確認
           echo "=== Built Binaries ==="
           ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway* || true
+          file bin/milkyway_nbody || file nbody/milkyway_nbody || true
 
       - name: Upload Native Binary
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: milkyway_nbody_m4
+          name: milkyway_nbody_m4_macos
           path: |
             source/build/bin/
             source/build/nbody/
