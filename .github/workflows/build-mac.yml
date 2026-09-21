@@ -33,7 +33,7 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【衝突解消パッチ】mac_spawn.hの宣言を生かしつつ不要呼出を無害化
+          # 【最終解決パッチ】型完全一致によるprocinfoの正常通過
           python3 -c "
           import os
 
@@ -62,20 +62,13 @@ jobs:
                           with open(fpath, 'w', encoding='utf-8') as f:
                               f.write(dummy_code)
 
-          # 2. procinfo の定数補完 & diagnostics の安全なスタブ化（filesysのマクロは干渉するため除外）
-          patches = {
-              'lib/procinfo_mac.cpp': '#define NUMBRANDS 1\nstatic const char* brandName[] = {\"BOINC\"};\n'
-          }
+          # 2. procinfo_mac.cpp の末尾に、公式ヘッダー(mac_branding.h)と完全一致する型で実体を注入
+          if os.path.exists('lib/procinfo_mac.cpp'):
+              with open('lib/procinfo_mac.cpp', 'a', encoding='utf-8') as f:
+                  f.write('\nchar *brandName[5] = {(char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\"};\n')
+              print('Successfully appended matching brandName definition to lib/procinfo_mac.cpp')
 
-          for rel_path, inject_str in patches.items():
-              if os.path.exists(rel_path):
-                  with open(rel_path, 'r', encoding='utf-8', errors='ignore') as f:
-                      content = f.read()
-                  with open(rel_path, 'w', encoding='utf-8') as f:
-                      f.write(inject_str + content)
-                  print(f'Successfully patched {rel_path}')
-
-          # 3. PrintBacktrace の呼出だけをピンポイントで無力化（ヘッダー宣言と衝突させない）
+          # 3. PrintBacktrace の呼出だけをピンポイントで無力化
           if os.path.exists('lib/diagnostics.cpp'):
               with open('lib/diagnostics.cpp', 'r', encoding='utf-8', errors='ignore') as f:
                   d_content = f.read()
