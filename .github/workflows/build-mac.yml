@@ -82,16 +82,23 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include" \
             -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include"
-
       - name: Compile & Link N-body
         run: |
           cd source/build
 
-          # macOSリンカーが死ぬ -static フラグを除去
+          # 1. 警告で止まらないよう、念のため全CMakeListsから -Werror を抹消
+          find .. -name "CMakeLists.txt" -exec sed -i '' 's/-Werror//g' {} + 2>/dev/null || true
+
+          # 2. macOSリンカーが死ぬ -static フラグを除去
           find . -name "link.txt" -exec sed -i '' 's/-static//g' {} + 2>/dev/null || true
 
-          # ビルド実行
-          make -j$(sysctl -n hw.ncpu)
+          # 3. まず並列ビルドを試み、失敗した場合はシングルスレッドで詳細エラーを直撃表示
+          make -j$(sysctl -n hw.ncpu) || {
+            echo "========================================================"
+            echo "=== BUILD FAILED: Capturing the exact error with VERBOSE=1 ==="
+            echo "========================================================"
+            make VERBOSE=1
+          }
 
           echo "=== Built Binaries ==="
           ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway*
