@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-test:
-    runs-on: macos-15
+    runs-on: macos-26  # ご指定の macOS 26 ランナー
     steps:
       - name: Show System Info & Clang Version
         run: |
@@ -47,25 +47,41 @@ jobs:
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Build MilkyWay N-body with M4 Flags
+      - name: Configure & Patch MilkyWay CMake (M4 Optimized)
         run: |
           cd source
+
+          # 1. CMake 4.x の「古いCMake互換切り捨てエラー」をパッチで回避
+          sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
+
           mkdir -p build && cd build
 
-          # BOINCライブラリとOpenMPの場所を明示し、M4フラグでCMakeを構成
+          # 2. READMEの公式フラグとM4最適化フラグを注入して構成
           cmake .. \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DBOINC_DIR=../boinc/boinc \
+            -DBOINC_APPLICATION=ON \
             -DNBODY=ON \
             -DSEPARATION=OFF \
+            -DNBODY_OPENMP=ON \
+            -DNBODY_GL=OFF \
             -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -Wno-error" \
-            -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -Wno-error"
+            -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include" \
+            -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -Wno-error -I/opt/homebrew/opt/libomp/include"
 
-          # N-body本体のビルド
+          # 3. macOSリンカーが即死する「-static」指定を生成ファイルから全自動除去
+          find . -name "link.txt" -exec sed -i '' 's/-static//g' {} + 2>/dev/null || true
+
+      - name: Compile & Link N-body
+        run: |
+          cd source/build
+
+          # 念のため再度 link.txt から -static を削ってからビルド
+          find . -name "link.txt" -exec sed -i '' 's/-static//g' {} + 2>/dev/null || true
+
           make -j$(sysctl -n hw.ncpu)
 
-          # 完成バイナリの確認
           echo "=== Built Binaries ==="
           ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway*
 
