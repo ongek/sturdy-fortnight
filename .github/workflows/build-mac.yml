@@ -147,8 +147,9 @@ jobs:
             sed -i '' 's/-static//g' "$linkfile"
           done
 
-          # 本番コンパイル＆リンク
-          make -j$(sysctl -n hw.ncpu)
+          # 【エラー炙り出しビルド】
+          # 並列で進められる所まで進め、エラーが出た場合は1スレッドで詳細エラーを直撃表示して停止する
+          make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
 
           # バイナリのアーキテクチャ・署名・依存関係チェック
           echo "=== Built Binary Info ==="
