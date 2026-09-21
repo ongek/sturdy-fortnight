@@ -47,7 +47,7 @@ jobs:
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure & Patch MilkyWay CMake (M4 Extreme Tuning)
+      - name: Configure & Patch MilkyWay CMake (M4 E-Core Specialized)
         run: |
           cd source
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
@@ -57,14 +57,15 @@ jobs:
           SYSROOT=$(xcrun --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
 
-          # 【M4極限最適化フラグ群】
-          # 1. -mcpu=apple-m4: M4のパイプライン特性を直撃
-          # 2. -flto=thin: リンク時最適化（ファイル境界を越えたインライン化）
-          # 3. -falign-functions=128: M4の128バイトキャッシュラインにコードを整列
-          # 4. -funroll-loops: 10ワイド超幅広デコードを埋めるループ展開
-          # 5. -ffp-contract=fast: ハードウェアFMA（積和演算器）を全開駆動
-          # 6. -mmacosx-version-min=15.0: 2007年のLeopard互換を脱却し最新ABIを適用
-          M4_OPT="-O3 -mcpu=apple-m4 -flto=thin -falign-functions=128 -funroll-loops -ffp-contract=fast -fno-math-errno -mmacosx-version-min=15.0"
+          # 【Eコア専用調律フラグ】
+          # 1. -mcpu=apple-m4: M4命令セット（ARMv9）をフル活用
+          # 2. -flto=thin: リンク時最適化
+          # 3. -falign-functions=128: 128バイトキャッシュライン整列
+          # 4. -mllvm -inline-threshold=350: L1i(128KB)にジャストフィットさせる上品なインライン化
+          # 5. -ffp-contract=fast: NEONポートでのFMA積和演算を解放
+          # 6. -fno-math-errno: 数学関数のインライン化促進
+          # ※過剰な -funroll-loops は意図的に除外（EコアのROB詰まり防止）
+          ECORE_OPT="-O3 -mcpu=apple-m4 -flto=thin -falign-functions=128 -mllvm -inline-threshold=350 -ffp-contract=fast -fno-math-errno -mmacosx-version-min=15.0"
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -78,34 +79,28 @@ jobs:
             -DNBODY_OPENMP=ON \
             -DNBODY_GL=OFF \
             -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
-            -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include" \
-            -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include" \
-            -DOpenMP_C_LIB_NAMES="omp" \
-            -DOpenMP_CXX_LIB_NAMES="omp" \
-            -DOpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$M4_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$M4_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$ECORE_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$ECORE_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
 
-      - name: Compile & Link N-body (with link.txt Surgery & ThinLTO)
+      - name: Compile & Link N-body (Static libomp & E-Core Tuned)
         run: |
           cd source/build
 
-          # コンパイル実行（オブジェクトファイル生成）
           make -j$(sysctl -n hw.ncpu) || true
 
           TARGET_LINK="nbody/CMakeFiles/milkyway_nbody.dir/link.txt"
           if [ -f "$TARGET_LINK" ]; then
-            echo "=== Patching $TARGET_LINK ==="
-            # 不正オプションの消去
+            echo "=== Patching $TARGET_LINK for E-Core ==="
             sed -i '' 's/-Wl,--start-group//g; s/-Wl,--end-group//g; s/--start-group//g; s/--end-group//g' "$TARGET_LINK"
             sed -i '' 's/-libstdc++//g; s/-static//g' "$TARGET_LINK"
-            
-            # 古い10.5ターゲットを消し、最新の15.0とThinLTO、OpenMPをリンクに注入
             sed -i '' 's/-mmacosx-version-min=[0-9.]*/-mmacosx-version-min=15.0/g' "$TARGET_LINK"
-            sed -i '' 's|$| -flto=thin -L/opt/homebrew/opt/libomp/lib -lomp|' "$TARGET_LINK"
+            
+            # dylibの代わりに「静的ライブラリ（libomp.a）」を直接結合！
+            # これにより間接参照テーブル（PLT/GOT）を排除し、Eコアの分岐ミスを極小化
+            sed -i '' 's|$| -flto=thin /opt/homebrew/opt/libomp/lib/libomp.a|' "$TARGET_LINK"
 
-            echo "=== Executing Tuned Link Command ==="
+            echo "=== Executing E-Core Link Command ==="
             (cd nbody && bash -c "$(cat CMakeFiles/milkyway_nbody.dir/link.txt)")
           fi
 
@@ -113,11 +108,15 @@ jobs:
           ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway* || true
           file bin/milkyway_nbody || file nbody/milkyway_nbody || true
 
-      - name: Upload Native Binary
+          # 依存関係の確認（libomp.dylib が消えて完全自己完結しているか確認）
+          echo "=== Dynamic Library Dependencies ==="
+          otool -L bin/milkyway_nbody || true
+
+      - name: Upload E-Core Binary
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: milkyway_nbody_m4_extreme
+          name: milkyway_nbody_m4_ecore
           path: |
             source/build/bin/
             source/build/nbody/
