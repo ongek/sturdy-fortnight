@@ -33,80 +33,7 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【強化パッチ】全階層の mac/ 配下を漏れなくスタブ化し、iOS非対応ヘッダーを全滅させる
-          python3 -c "
-          import os
-
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  fpath = os.path.join(root, file)
-                  # パスに '/mac/' が含まれる全ソースファイルを空のスタブにする
-                  if '/mac/' in fpath or fpath.startswith('./mac/'):
-                      if file.endswith(('.cpp', '.c', '.h', '.m', '.mm')):
-                          with open(fpath, 'w') as f:
-                              f.write('// empty stub for iOS\n')
-                  elif file.endswith(('.cpp', '.c', '.h')):
-                      with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                          c = f.read()
-                      c = c.replace('#include <Carbon/', '// #include <Carbon/')
-                      c = c.replace('#include <CoreServices/', '// #include <CoreServices/')
-                      c = c.replace('#include <IOKit/', '// #include <IOKit/')
-                      c = c.replace('NXEventHandle', 'void*')
-                      with open(fpath, 'w', encoding='utf-8') as f:
-                          f.write(c)
-          "
-
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-
-          ./_autosetup
-          ./configure \
-            --host=arm-apple-darwin \
-            --disable-server \
-            --disable-client \
-            --disable-manager \
-            --enable-libraries \
-            --disable-shared \
-            --enable-static \
-            CFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error" \
-            CXXFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error"
-
-          make -C lib -j$(sysctl -n hw.ncpu)
-          make -C api -j$(sysctl -n hw.ncpu)
-
-      - name: Configure & Patch MilkyWay CMake (A17 Pro iOS Native)
-        run: |
-          cd source
-          sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
-          sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
-
-          mkdir -p build && cd build
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
-
-          # 【A17 Pro 全力最適化フラグ (シングルスレッド高密度版)】
-          A17_OPT="-O3 -mcpu=apple-a17 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -ffp-contract=fast -fno-math-errno"
-
-          cmake .. \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
-            -DBOINC_DIR=../boinc/boinc \
-            -DBOINC_APPLICATION=ON \
-            -DNBODY=ON \
-            -DSEPARATION=OFF \
-            -DNBODY_OPENMP=OFF \
-            -DNBODY_GL=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_OPT $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_OPT $CLANG_PERMISSIVE"
-
-      - name: Build BOINC Libraries (iOS arm64)
-        run: |
-          cd source/boinc/boinc
-          mkdir -p "$HOME/bin"
-          ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
-          export PATH="$HOME/bin:$PATH"
-
-          # 【完全撃破パッチ】未定義エラーの呼び出し箇所を直接外科手術で無害化
+          # 【完全撃破パッチ】macOS専用の呼出・ヘッダー・関数を全方位から無力化
           python3 -c "
           import os
 
@@ -133,9 +60,10 @@ jobs:
                   elif file.endswith(('.cpp', '.c', '.h')):
                       with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
                           c = f.read()
-                      # 呼び出し元を直接無害化
+                      # 未定義関数呼び出しを直接無害化
                       c = c.replace('PrintBacktrace();', '// PrintBacktrace();')
                       c = c.replace('retval = callPosixSpawn(buf);', 'retval = -1;')
+                      # iOS SDKに存在しないmacOSフレームワーク参照を無効化
                       c = c.replace('#include <Carbon/', '// #include <Carbon/')
                       c = c.replace('#include <CoreServices/', '// #include <CoreServices/')
                       c = c.replace('#include <IOKit/', '// #include <IOKit/')
@@ -160,6 +88,53 @@ jobs:
 
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
+
+      - name: Configure MilkyWay CMake (A17 Pro iOS Native)
+        run: |
+          cd source
+          sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
+          sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
+
+          mkdir -p build && cd build
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
+
+          # 【A17 Pro 全力最適化フラグ (シングルスレッド高密度版)】
+          A17_OPT="-O3 -mcpu=apple-a17 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -ffp-contract=fast -fno-math-errno"
+
+          cmake .. \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
+            -DBOINC_DIR=../boinc/boinc \
+            -DBOINC_APPLICATION=ON \
+            -DNBODY=ON \
+            -DSEPARATION=OFF \
+            -DNBODY_OPENMP=OFF \
+            -DNBODY_GL=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="$A17_OPT $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A17_OPT $CLANG_PERMISSIVE"
+
+      - name: Build MilkyWay N-Body (with Linker Sanitization)
+        run: |
+          cd source/build
+
+          # 【地雷7 外科手術】Linux専用リンカーオプションを根絶
+          find . -name "link.txt" | while read -r linkfile; do
+            sed -i '' 's/-Wl,--start-group//g' "$linkfile"
+            sed -i '' 's/-Wl,--end-group//g' "$linkfile"
+            sed -i '' 's/-libstdc++//g' "$linkfile"
+            sed -i '' 's/-static//g' "$linkfile"
+          done
+
+          # 本番コンパイル＆リンク
+          make -j$(sysctl -n hw.ncpu)
+
+          # バイナリのアーキテクチャ・署名・依存関係チェック
+          echo "=== Built Binary Info ==="
+          ls -lh bin/milkyway_nbody
+          file bin/milkyway_nbody
+          otool -L bin/milkyway_nbody
 
       - name: Upload A17 Pro Binary
         uses: actions/upload-artifact@v4
