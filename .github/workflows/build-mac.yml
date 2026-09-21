@@ -115,6 +115,19 @@ jobs:
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
+          # 【iOS対策】Luaのos.execute()内のsystem()呼出を-1に無害化
+          python3 -c "
+          import os
+          fpath = 'lua/src/loslib.c'
+          if os.path.exists(fpath):
+              with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                  c = f.read()
+              c = c.replace('system(luaL_optstring(L, 1, NULL))', '-1')
+              with open(fpath, 'w', encoding='utf-8') as f:
+                  f.write(c)
+              print('Successfully neutralized system() in lua loslib.c')
+          "
+
           mkdir -p build && cd build
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
