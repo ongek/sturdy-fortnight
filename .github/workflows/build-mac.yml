@@ -79,30 +79,35 @@ jobs:
             -DCMAKE_C_FLAGS="$A17_OPT $CLANG_PERMISSIVE" \
             -DCMAKE_CXX_FLAGS="$A17_OPT $CLANG_PERMISSIVE"
 
-      - name: Compile & Link N-body for A17 Pro
+      - name: Build BOINC Libraries (iOS arm64)
         run: |
-          cd source/build
+          cd source/boinc/boinc
+          mkdir -p "$HOME/bin"
+          ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
+          export PATH="$HOME/bin:$PATH"
 
-          make -j$(sysctl -n hw.ncpu) || true
+          # 【パッチ①】iOSに存在しないIOKit関連ヘッダーを無力化
+          find lib api -type f \( -name "*.h" -o -name "*.cpp" \) -exec sed -i '' 's|#include <IOKit/.*|// #include <IOKit/...>|g' {} +
 
-          TARGET_LINK="nbody/CMakeFiles/milkyway_nbody.dir/link.txt"
-          if [ -f "$TARGET_LINK" ]; then
-            echo "=== Patching $TARGET_LINK for A17 Pro iOS ==="
-            sed -i '' 's/-Wl,--start-group//g; s/-Wl,--end-group//g; s/--start-group//g; s/--end-group//g' "$TARGET_LINK"
-            sed -i '' 's/-libstdc++//g; s/-static//g' "$TARGET_LINK"
-            
-            # iOS SDKパスを正規化
-            IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-            sed -i '' "s|-isysroot [^ ]*|-isysroot $IOS_SDK -target arm64-apple-ios16.0|g" "$TARGET_LINK"
-            sed -i '' 's|$| -flto=thin|' "$TARGET_LINK"
+          # 【パッチ②】未定義になった macOS専用の NXEventHandle 型を void* に一括置換
+          find lib api -type f \( -name "*.h" -o -name "*.cpp" \) -exec sed -i '' 's/NXEventHandle/void*/g' {} +
 
-            echo "=== Executing A17 Pro Link Command ==="
-            (cd nbody && bash -c "$(cat CMakeFiles/milkyway_nbody.dir/link.txt)")
-          fi
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-          echo "=== Built A17 Pro Binaries ==="
-          ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway* || true
-          file bin/milkyway_nbody || true
+          ./_autosetup
+          ./configure \
+            --host=arm-apple-darwin \
+            --disable-server \
+            --disable-client \
+            --disable-manager \
+            --enable-libraries \
+            --disable-shared \
+            --enable-static \
+            CFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error" \
+            CXXFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error"
+
+          make -C lib -j$(sysctl -n hw.ncpu)
+          make -C api -j$(sysctl -n hw.ncpu)
 
       - name: Upload A17 Pro Binary
         uses: actions/upload-artifact@v4
