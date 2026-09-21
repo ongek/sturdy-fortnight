@@ -33,11 +33,11 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【完全網羅パッチ】C/C++両対応スタブ ＆ procinfo定数注入
+          # 【衝突解消パッチ】mac_spawn.hの宣言を生かしつつ不要呼出を無害化
           python3 -c "
           import os
 
-          # 1. C言語(.c)とC++(.cpp)のどちらでも完璧に通るダミーコード
+          # 1. mac/ 配下の実装コード(.c, .cpp, .m, .mm)をC/C++両対応スタブ化
           dummy_code = '''
           #include <stdio.h>
           #include <stdlib.h>
@@ -54,7 +54,6 @@ jobs:
           #endif
           '''
 
-          # 2. mac/ ディレクトリ配下のソースコード(.c, .cpp, .m, .mm)を両対応スタブに置換
           for root, dirs, files in os.walk('.'):
               for file in files:
                   fpath = os.path.join(root, file)
@@ -63,20 +62,27 @@ jobs:
                           with open(fpath, 'w', encoding='utf-8') as f:
                               f.write(dummy_code)
 
-          # 3. diagnostics, filesys, procinfo の1行目にマクロ・定数を強制注入
+          # 2. procinfo の定数補完 & diagnostics の安全なスタブ化（filesysのマクロは干渉するため除外）
           patches = {
-              'lib/diagnostics.cpp': '#define PrintBacktrace() ((void)0)\n',
-              'lib/filesys.cpp': '#define callPosixSpawn(x) (-1)\n',
               'lib/procinfo_mac.cpp': '#define NUMBRANDS 1\nstatic const char* brandName[] = {\"BOINC\"};\n'
           }
 
-          for rel_path, macro in patches.items():
+          for rel_path, inject_str in patches.items():
               if os.path.exists(rel_path):
                   with open(rel_path, 'r', encoding='utf-8', errors='ignore') as f:
                       content = f.read()
                   with open(rel_path, 'w', encoding='utf-8') as f:
-                      f.write(macro + content)
+                      f.write(inject_str + content)
                   print(f'Successfully patched {rel_path}')
+
+          # 3. PrintBacktrace の呼出だけをピンポイントで無力化（ヘッダー宣言と衝突させない）
+          if os.path.exists('lib/diagnostics.cpp'):
+              with open('lib/diagnostics.cpp', 'r', encoding='utf-8', errors='ignore') as f:
+                  d_content = f.read()
+              d_content = d_content.replace('PrintBacktrace();', '// PrintBacktrace();')
+              with open('lib/diagnostics.cpp', 'w', encoding='utf-8') as f:
+                  f.write(d_content)
+              print('Successfully neutralized PrintBacktrace in lib/diagnostics.cpp')
 
           # 4. iOS SDKに存在しないmacOSフレームワーク参照を無害化
           for root, dirs, files in os.walk('.'):
