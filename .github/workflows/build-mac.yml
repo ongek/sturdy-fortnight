@@ -1,8 +1,8 @@
 name: Build MilkyWay macOS Native
 
 on:
-  push:               # プッシュで自動実行
-  workflow_dispatch:  # 手動ボタンも一応残しておく
+  push:
+  workflow_dispatch:
 
 jobs:
   build-test:
@@ -29,19 +29,11 @@ jobs:
       - name: Build BOINC Libraries (arm64)
         run: |
           cd source/boinc/boinc
-
-          # 1. libtoolize の物理シンボリックリンクを作成して PATH に通す
           mkdir -p "$HOME/bin"
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 動作確認（これで libtoolize が確実に認識される）
-          which libtoolize
-
-          # 2. ビルドスクリプトの生成
           ./_autosetup
-
-          # 3. ライブラリのみの構成
           ./configure \
             --disable-server \
             --disable-client \
@@ -52,10 +44,36 @@ jobs:
             CFLAGS="-O3 -arch arm64 -Wno-error" \
             CXXFLAGS="-O3 -arch arm64 -Wno-error"
 
-          # 4. 余計なエラーを避けるため lib と api のみピンポイント並列ビルド
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-          # 5. 成果物の存在確認
-          echo "=== Successfully Built BOINC Libraries ==="
-          ls -lh lib/libboinc.a api/libboinc_api.a
+      - name: Build MilkyWay N-body with M4 Flags
+        run: |
+          cd source
+          mkdir -p build && cd build
+
+          # BOINCライブラリとOpenMPの場所を明示し、M4フラグでCMakeを構成
+          cmake .. \
+            -DBOINC_DIR=../boinc/boinc \
+            -DNBODY=ON \
+            -DSEPARATION=OFF \
+            -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-O3 -mcpu=apple-m4 -Wno-error" \
+            -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-m4 -Wno-error"
+
+          # N-body本体のビルド
+          make -j$(sysctl -n hw.ncpu)
+
+          # 完成バイナリの確認
+          echo "=== Built Binaries ==="
+          ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway*
+
+      - name: Upload Native Binary
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: milkyway_nbody_m4
+          path: |
+            source/build/bin/
+            source/build/nbody/
