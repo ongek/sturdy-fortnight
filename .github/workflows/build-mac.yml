@@ -33,8 +33,18 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【パッチ①】iOSに存在しないIOKit関連ヘッダーを一網打尽に全行コメントアウト
-          find lib api -type f \( -name "*.h" -o -name "*.cpp" \) -exec sed -i '' 's|#include <IOKit/.*|// #include <IOKit/...>|g' {} +
+          # 【パッチ①＆②】Pythonで確実にIOKitとNXEventHandleを一括無害化
+          python3 -c "
+          import glob
+          for pattern in ['lib/*.h', 'lib/*.cpp', 'api/*.h', 'api/*.cpp']:
+              for fpath in glob.glob(pattern):
+                  with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                      content = f.read()
+                  content = content.replace('#include <IOKit/', '// #include <IOKit/')
+                  content = content.replace('NXEventHandle', 'void*')
+                  with open(fpath, 'w', encoding='utf-8') as f:
+                      f.write(content)
+          "
 
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
