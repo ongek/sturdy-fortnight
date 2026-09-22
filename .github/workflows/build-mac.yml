@@ -218,14 +218,10 @@ jobs:
             sed -i '' 's/-Wl,--end-group//g' "$linkfile"
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
+            # ★追加: 未解決シンボル（_nebula_direct_progress 等）を実行時解決にする
+            echo " -Wl,-undefined,dynamic_lookup" >> "$linkfile"
           done
           make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
-          echo "=== Built dylib Info ==="
-          DYLIB_FILE=$(find . -name "*milkyway_nbody*.dylib" | head -n 1)
-          ls -lh "$DYLIB_FILE"
-          file "$DYLIB_FILE"
-          otool -L "$DYLIB_FILE"
-          nm -gU "$DYLIB_FILE" | grep -E "(milkyway_nbody_entry|main)" || true
 
       - name: Upload A17 Pro dylib
         uses: actions/upload-artifact@v4
