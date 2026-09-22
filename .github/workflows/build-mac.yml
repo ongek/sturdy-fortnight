@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-a17pro:
-    runs-on: xcode-27
+    runs-on: macos-14
     steps:
       - name: Show System Info & Clang Version
         run: |
@@ -77,7 +77,6 @@ jobs:
                       fpath = os.path.join(root, file)
                       with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
                           c = f.read()
-                      # 空白入り include (#  include <IOKit/...) にも完全対応
                       c = re.sub(r'#\s*include\s*<Carbon/', '// #include <Carbon/', c)
                       c = re.sub(r'#\s*include\s*<CoreServices/', '// #include <CoreServices/', c)
                       c = re.sub(r'#\s*include\s*<IOKit/', '// #include <IOKit/', c)
@@ -90,7 +89,6 @@ jobs:
               with open('api/boinc_api.cpp', 'r', encoding='utf-8', errors='ignore') as f:
                   c = f.read()
               
-              # ① boinc_finish: 即座に exit(0) で Swift へ即時脱出
               old_finish = 'int boinc_finish(int status) {'
               new_finish = '''int boinc_finish(int status) {
                   fprintf(stderr, \"[Nebula-Dylib] Intercepted boinc_finish(%d) -> Force Clean Exit\\\\n\", status);
@@ -101,7 +99,6 @@ jobs:
                   c = c.replace(old_finish, new_finish, 1)
                   print('>>> [SUCCESS] Patched boinc_finish!')
               
-              # ② boinc_fraction_done: weak属性付き直接フック
               old_frac = 'int boinc_fraction_done(double x) {'
               new_frac = '''#ifdef __cplusplus
               extern \"C\" {
@@ -131,7 +128,7 @@ jobs:
             --enable-libraries \
             --disable-shared \
             --enable-static \
-            CFLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -Wno-error"
+            CFLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -Wno-error" \
             CXXFLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -Wno-error"
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
@@ -141,6 +138,56 @@ jobs:
           cd source
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
+
+          # ====================================================================
+          # ★【前処理の完全可視化パッチ】（安全な波括弧内注入方式）
+          # ====================================================================
+          python3 -c "
+          import os
+
+          # ① 矮小銀河の軌道逆積分（時間ステップごとの進捗）
+          fpath = 'nbody/src/nbody_orbit_integrator.c'
+          if os.path.exists(fpath):
+              with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                  c = f.read()
+              for pattern in ['while (t < t_end)', 'while (t > t_end)']:
+                  if pattern in c:
+                      pos = c.find(pattern)
+                      brace_pos = c.find('{', pos)
+                      if brace_pos != -1:
+                          inject = '''
+                          static int step_cnt = 0;
+                          if (++step_cnt % 500 == 0) {
+                              fprintf(stderr, \"[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\\\n\");
+                              fflush(stderr);
+                          }'''
+                          c = c[:brace_pos+1] + inject + c[brace_pos+1:]
+                          with open(fpath, 'w', encoding='utf-8') as f:
+                              f.write(c)
+                          print('>>> [SUCCESS] Patched orbit integrator progress!')
+                          break
+
+          # ② 11万体の星のサンプリング生成進捗
+          fpath2 = 'nbody/src/nbody.c'
+          if os.path.exists(fpath2):
+              with open(fpath2, 'r', encoding='utf-8', errors='ignore') as f:
+                  c2 = f.read()
+              for pattern in ['for (i = 0; i < n_bodies; i++)', 'for (i = 0; i < n_bodies; ++i)', 'for (int i = 0; i < n_bodies; i++)']:
+                  if pattern in c2:
+                      pos = c2.find(pattern)
+                      brace_pos = c2.find('{', pos)
+                      if brace_pos != -1:
+                          inject = '''
+                          if (i % 20000 == 0) {
+                              fprintf(stderr, \"[Preprocess-Bodies] 天体データ生成中... (%d / %d 体)\\\\n\", (int)i, (int)n_bodies);
+                              fflush(stderr);
+                          }'''
+                          c2 = c2[:brace_pos+1] + inject + c2[brace_pos+1:]
+                          with open(fpath2, 'w', encoding='utf-8') as f:
+                              f.write(c2)
+                          print('>>> [SUCCESS] Patched body generator progress!')
+                          break
+          "
           
           # 1. Lua の system() 呼出を無害化
           python3 -c "
@@ -186,16 +233,13 @@ jobs:
           # 2. 計算精度絶対保証（結合法則や除算近似を行わず、ハードウェア命令直結）
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           
-          # 3. ループ展開＆インライン最適化（AppleClang正規フラグ）
-          #    ・-funroll-loops: 4基のNEON/FPパイプラインを飽和させるアグレッシブなループアンローリング
-          #    ・-inline-threshold=1500: A17 Proの巨大L1Iキャッシュ(192KB)を活かした積極インライン展開
+          # 3. ループ展開＆インライン最適化
           A17_OPT_FLAGS="-funroll-loops -mllvm -inline-threshold=1500"
           
           # 4. ThinLTO (リンク時最適化)
           A17_LTO="-flto=thin"
 
           A17_FULL_OPT="$A17_ARCH $A17_PRECISION $A17_OPT_FLAGS $A17_LTO"
-
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -213,14 +257,13 @@ jobs:
       - name: Build MilkyWay N-Body dylib
         run: |
           cd source/build
-          # 不要なLinuxリンカーオプションの除去
           find . -name "link.txt" | while read -r linkfile; do
             sed -i '' 's/-Wl,--start-group//g' "$linkfile"
             sed -i '' 's/-Wl,--end-group//g' "$linkfile"
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
             
-            # ★【完全確実な判定】ar コマンド(静的ライブラリ)ではない、C++/Clang リンカー行にだけ dynamic_lookup を注入！
+            # ★ ar(静的ライブラリ)ではないリンク行にだけ dynamic_lookup を注入
             if ! grep -q "/ar " "$linkfile"; then
               sed -i '' 's/$/ -Wl,-undefined,dynamic_lookup/g' "$linkfile"
               echo "Injected dynamic_lookup into: $linkfile"
