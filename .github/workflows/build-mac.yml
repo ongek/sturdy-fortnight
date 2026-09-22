@@ -30,12 +30,13 @@ jobs:
         run: |
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           
-          # openmp と llvm/cmake を最小限取得 (浅いクローンで数秒)
+          # openmp と cmake 共通モジュールを最小取得
           git clone --depth 1 --filter=blob:none --sparse -b release/18.x https://github.com/llvm/llvm-project.git llvm_src
           cd llvm_src
           git sparse-checkout set openmp cmake
           
-          cd openmp/runtime
+          # ★ 親ディレクトリ openmp をターゲットにしてビルド
+          cd openmp
           mkdir build && cd build
           
           cmake .. \
@@ -44,24 +45,33 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DOPENMP_STANDALONE_BUILD=ON \
             -DCMAKE_MODULE_PATH="$GITHUB_WORKSPACE/llvm_src/cmake/Modules" \
             -DLIBOMP_ENABLE_SHARED=OFF \
             -DLIBOMP_OMPT_SUPPORT=OFF \
             -DLIBOMP_USE_HWLOC=OFF \
+            -DOPENMP_ENABLE_LIBOMPTARGET=OFF \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_C_FLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK" \
             -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK"
           
+          # 静的ライブラリと omp.h ヘッダーを生成
           ninja omp
           
           mkdir -p "$GITHUB_WORKSPACE/openmp_ios/lib" "$GITHUB_WORKSPACE/openmp_ios/include"
-          cp src/libomp.a "$GITHUB_WORKSPACE/openmp_ios/lib/"
-          cp src/omp.h "$GITHUB_WORKSPACE/openmp_ios/include/"
+          
+          # 生成された libomp.a と omp.h を所定の位置へコピー
+          LIB_FILE=$(find . -name "libomp.a" | head -n 1)
+          HEADER_FILE=$(find . -name "omp.h" | head -n 1)
+          
+          cp "$LIB_FILE" "$GITHUB_WORKSPACE/openmp_ios/lib/"
+          cp "$HEADER_FILE" "$GITHUB_WORKSPACE/openmp_ios/include/"
           
           echo "=== libomp.a Built Successfully ==="
           ls -lh "$GITHUB_WORKSPACE/openmp_ios/lib/libomp.a"
           file "$GITHUB_WORKSPACE/openmp_ios/lib/libomp.a"
+          ls -lh "$GITHUB_WORKSPACE/openmp_ios/include/omp.h"
 
       - name: Build BOINC Libraries (iOS arm64 tuned for A17 Pro)
         run: |
