@@ -30,9 +30,6 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
           
-          # ====================================================================
-          # 【完全統合パッチ】iOS SDK非互換ヘッダーの無害化 ＆ BOINC API外科手術
-          # ====================================================================
           python3 -c "
           import os, re
           dummy_code = '''
@@ -50,7 +47,6 @@ jobs:
           }
           #endif
           '''
-          # 1. mac ディレクトリ内のデスクトップ専用コードをスタブ化
           for root, dirs, files in os.walk('.'):
               for file in files:
                   fpath = os.path.join(root, file)
@@ -70,7 +66,6 @@ jobs:
               with open('lib/diagnostics.cpp', 'w', encoding='utf-8') as f:
                   f.write(d_content)
 
-          # 2. 全ファイルから iOS に存在しない macOS 専用ヘッダー（IOKit, Carbon, CoreServices等）を無害化
           for root, dirs, files in os.walk('.'):
               for file in files:
                   if file.endswith(('.cpp', '.c', '.h')):
@@ -84,7 +79,7 @@ jobs:
                       with open(fpath, 'w', encoding='utf-8') as f:
                           f.write(c)
 
-          # 3. boinc_api.cpp の外科手術（100%フリーズ根治 ＆ 弱参照進捗フック）
+          # ★脱出フック＆ダイレクト進捗フックを直接注入
           if os.path.exists('api/boinc_api.cpp'):
               with open('api/boinc_api.cpp', 'r', encoding='utf-8', errors='ignore') as f:
                   c = f.read()
@@ -98,7 +93,7 @@ jobs:
               }
               #endif
               int boinc_finish(int status) {
-                  fprintf(stderr, \"[Nebula-Dylib] Intercepted boinc_finish(%d) -> Escaping to Swift!\\\\n\", status);
+                  fprintf(stderr, \"[Nebula-Dylib] Intercepted boinc_finish(%d) -> Direct Escape!\\\\n\", status);
                   fflush(stderr);
                   if (nebula_force_exit) {
                       nebula_force_exit(status);
@@ -122,7 +117,7 @@ jobs:
               '''
               if old_frac in c:
                   c = c.replace(old_frac, new_frac, 1)
-                  print('>>> [SUCCESS] Patched boinc_fraction_done with weak hook!')
+                  print('>>> [SUCCESS] Patched boinc_fraction_done with direct hook!')
 
               with open('api/boinc_api.cpp', 'w', encoding='utf-8') as f:
                   f.write(c)
@@ -150,12 +145,12 @@ jobs:
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
           # ====================================================================
-          # ★【前処理の完全可視化パッチ】（安全な波括弧内注入方式）
+          # ★【前処理の完全可視化パッチ】
           # ====================================================================
           python3 -c "
           import os
 
-          # ① 矮小銀河の軌道逆積分（時間ステップごとの進捗）
+          # ① 矮小銀河の軌道逆積分の進捗
           fpath = 'nbody/src/nbody_orbit_integrator.c'
           if os.path.exists(fpath):
               with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -177,7 +172,7 @@ jobs:
                           print('>>> [SUCCESS] Patched orbit integrator progress!')
                           break
 
-          # ② 11万体の星のサンプリング生成進捗
+          # ② 11万体の星の生成進捗
           fpath2 = 'nbody/src/nbody.c'
           if os.path.exists(fpath2):
               with open(fpath2, 'r', encoding='utf-8', errors='ignore') as f:
@@ -199,7 +194,6 @@ jobs:
                           break
           "
           
-          # 1. Lua の system() 呼出を無害化
           python3 -c "
           import os
           fpath = 'lua/src/loslib.c'
@@ -211,11 +205,9 @@ jobs:
                   f.write(c)
           "
 
-          # 2. CMakeを実行ファイルからdylibに変更
           sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' nbody/CMakeLists.txt
           sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' nbody/CMakeLists.txt
           
-          # 3. main関数を確実に外部公開
           python3 -c "
           import os
           mpath = 'nbody/src/main.c'
@@ -232,23 +224,11 @@ jobs:
           mkdir -p build && cd build
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-          # ====================================================================
-          # ★★★ A17 Pro アーキテクチャ特化＆精度絶対保証フラグ（AppleClang最適化版） ★★★
-          # ====================================================================
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
-          
-          # 1. 基本アーキテクチャ & Apple Silicon特有の128バイトキャッシュ整合
           A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32"
-          
-          # 2. 計算精度絶対保証（結合法則や除算近似を行わず、ハードウェア命令直結）
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
-          
-          # 3. ループ展開＆インライン最適化
           A17_OPT_FLAGS="-funroll-loops -mllvm -inline-threshold=1500"
-          
-          # 4. ThinLTO (リンク時最適化)
           A17_LTO="-flto=thin"
-
           A17_FULL_OPT="$A17_ARCH $A17_PRECISION $A17_OPT_FLAGS $A17_LTO"
 
           cmake .. \
@@ -273,7 +253,6 @@ jobs:
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
             
-            # ★ ar(静的ライブラリ)ではないリンク行にだけ dynamic_lookup を注入
             if ! grep -q "/ar " "$linkfile"; then
               sed -i '' 's/$/ -Wl,-undefined,dynamic_lookup/g' "$linkfile"
               echo "Injected dynamic_lookup into: $linkfile"
