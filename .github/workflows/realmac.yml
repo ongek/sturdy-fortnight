@@ -70,7 +70,12 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
+          # macOS SDKパスの取得
+          SYSROOT=$(xcrun --show-sdk-path)
+
           ./_autosetup
+
+          # configure 時は標準的なフラグのみ指定してコンパイラチェックの失敗を防ぐ
           ./configure \
             --disable-server \
             --disable-client \
@@ -78,11 +83,14 @@ jobs:
             --enable-libraries \
             --disable-shared \
             --enable-static \
-            CFLAGS="$ECORE_OPT -Wno-error" \
-            CXXFLAGS="$ECORE_OPT -Wno-error"
+            CC="clang" \
+            CXX="clang++" \
+            CFLAGS="-O3 -arch arm64 -isysroot $SYSROOT -mmacosx-version-min=15.0 -Wno-error" \
+            CXXFLAGS="-O3 -arch arm64 -isysroot $SYSROOT -mmacosx-version-min=15.0 -Wno-error"
 
-          make -C lib -j$(sysctl -n hw.ncpu)
-          make -C api -j$(sysctl -n hw.ncpu)
+          # 本体のビルド時に ECORE_OPT (ThinLTOやLLVMオプション等) を注入してビルド
+          make -C lib -j$(sysctl -n hw.ncpu) CFLAGS="$ECORE_OPT -Wno-error" CXXFLAGS="$ECORE_OPT -Wno-error"
+          make -C api -j$(sysctl -n hw.ncpu) CFLAGS="$ECORE_OPT -Wno-error" CXXFLAGS="$ECORE_OPT -Wno-error"
 
       - name: Configure & Patch MilkyWay CMake (M4 E-Core Specialized)
         run: |
