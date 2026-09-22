@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-a17pro:
-    runs-on: macos-14
+    runs-on: xcode-27
     steps:
       - name: Show System Info & Clang Version
         run: |
