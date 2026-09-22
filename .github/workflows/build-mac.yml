@@ -213,15 +213,26 @@ jobs:
       - name: Build MilkyWay N-Body dylib
         run: |
           cd source/build
+          # 不要なLinuxリンカーオプションの除去
           find . -name "link.txt" | while read -r linkfile; do
             sed -i '' 's/-Wl,--start-group//g' "$linkfile"
             sed -i '' 's/-Wl,--end-group//g' "$linkfile"
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
-            # ★追加: 未解決シンボル（_nebula_direct_progress 等）を実行時解決にする
-            echo " -Wl,-undefined,dynamic_lookup" >> "$linkfile"
           done
+
+          # ★【安全な修正】dylib(共有ライブラリ)の link.txt のリンク行にだけ dynamic_lookup を注入
+          find nbody -name "link.txt" | while read -r linkfile; do
+            sed -i '' 's/$/ -Wl,-undefined,dynamic_lookup/g' "$linkfile"
+          done
+
           make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
+          echo "=== Built dylib Info ==="
+          DYLIB_FILE=$(find . -name "*milkyway_nbody*.dylib" | head -n 1)
+          ls -lh "$DYLIB_FILE"
+          file "$DYLIB_FILE"
+          otool -L "$DYLIB_FILE"
+          nm -gU "$DYLIB_FILE" | grep -E "(milkyway_nbody_entry|main)" || true
 
       - name: Upload A17 Pro dylib
         uses: actions/upload-artifact@v4
