@@ -1,22 +1,22 @@
-name: Build MilkyWay M4 macOS Native
+name: Build MilkyWay macOS Native
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  build-a17pro:
+  build-test:
     runs-on: xcode-27
     steps:
       - name: Show System Info & Clang Version
         run: |
           uname -a
+          arch
           clang --version
-          xcrun --sdk iphoneos --show-sdk-path
 
       - name: Install Dependencies
         run: |
-          brew install cmake autoconf automake libtool
+          brew install libomp cmake autoconf automake libtool
 
       - name: Configure Git for Legacy Submodules
         run: |
@@ -26,167 +26,97 @@ jobs:
         run: |
           git clone --depth 1 --recurse-submodules https://github.com/Milkyway-at-home/milkywayathome_client.git source
 
-      - name: Build BOINC Libraries (iOS arm64)
+      - name: Build BOINC Libraries (arm64)
         run: |
           cd source/boinc/boinc
           mkdir -p "$HOME/bin"
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
 
-          # 【リンケージ整合パッチ】callPosixSpawnをC++リンケージとして定義！
-          python3 -c "
-          import os
-
-          dummy_code = '''
-          #include <stdio.h>
-          #include <stdlib.h>
-
-          // C++ リンケージ（filesys.cppの要求と完全一致）
-          int callPosixSpawn(const char* cmd) { (void)cmd; return -1; }
-
-          #ifdef __cplusplus
-          extern \"C\" {
-          #endif
-              void PrintBacktrace(void) {}
-              int compareOSVersionTo(int major, int minor, int bugFix) { 
-                  (void)major; (void)minor; (void)bugFix; return 0; 
-              }
-          #ifdef __cplusplus
-          }
-          #endif
-          '''
-
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  fpath = os.path.join(root, file)
-                  if '/mac/' in fpath or fpath.startswith('./mac/'):
-                      if file.endswith(('.cpp', '.c', '.m', '.mm')):
-                          with open(fpath, 'w', encoding='utf-8') as f:
-                              f.write(dummy_code)
-
-          if os.path.exists('lib/procinfo_mac.cpp'):
-              with open('lib/procinfo_mac.cpp', 'a', encoding='utf-8') as f:
-                  f.write('\nchar *brandName[5] = {(char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\"};\n')
-
-          if os.path.exists('lib/diagnostics.cpp'):
-              with open('lib/diagnostics.cpp', 'r', encoding='utf-8', errors='ignore') as f:
-                  d_content = f.read()
-              d_content = d_content.replace('PrintBacktrace();', '// PrintBacktrace();')
-              with open('lib/diagnostics.cpp', 'w', encoding='utf-8') as f:
-                  f.write(d_content)
-
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if file.endswith(('.cpp', '.c', '.h')):
-                      fpath = os.path.join(root, file)
-                      with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                          c = f.read()
-                      c = c.replace('#include <Carbon/', '// #include <Carbon/')
-                      c = c.replace('#include <CoreServices/', '// #include <CoreServices/')
-                      c = c.replace('#include <IOKit/', '// #include <IOKit/')
-                      c = c.replace('NXEventHandle', 'void*')
-                      with open(fpath, 'w', encoding='utf-8') as f:
-                          f.write(c)
-          "
-
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-
           ./_autosetup
           ./configure \
-            --host=arm-apple-darwin \
             --disable-server \
             --disable-client \
             --disable-manager \
             --enable-libraries \
             --disable-shared \
             --enable-static \
-            CFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error" \
-            CXXFLAGS="-O3 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -Wno-error"
+            CFLAGS="-O3 -arch arm64 -flto=thin -Wno-error" \
+            CXXFLAGS="-O3 -arch arm64 -flto=thin -Wno-error"
 
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure MilkyWay CMake for dylib (A17 Pro iOS Native)
+      - name: Configure & Patch MilkyWay CMake (M4 E-Core Specialized)
         run: |
           cd source
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
-          # 1. Lua の system() 呼出を無害化
-          python3 -c "
-          import os
-          fpath = 'lua/src/loslib.c'
-          if os.path.exists(fpath):
-              with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                  c = f.read()
-              c = c.replace('system(luaL_optstring(L, 1, NULL))', '-1')
-              with open(fpath, 'w', encoding='utf-8') as f:
-                  f.write(c)
-          "
-
-          # 2. ★CMakeを「実行ファイル(add_executable)」から「正規のdylib(add_library SHARED)」に外科手術！
-          sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' nbody/CMakeLists.txt
-          sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' nbody/CMakeLists.txt
-
-          # 3. ★main関数をiOSアプリから直接呼べる「milkyway_nbody_entry」にリネーム
-          python3 -c "
-          import os
-          mpath = 'nbody/src/main.c'
-          if os.path.exists(mpath):
-              with open(mpath, 'r', encoding='utf-8', errors='ignore') as f:
-                  c = f.read()
-              c = c.replace('int main(int argc, char **argv)', '__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)')
-              c = c.replace('int main(int argc, char *argv[])', '__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)')
-              with open(mpath, 'w', encoding='utf-8') as f:
-                  f.write(c)
-              print('Successfully renamed main() to exported milkyway_nbody_entry()')
-          "
-
           mkdir -p build && cd build
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          SYSROOT=$(xcrun --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
 
-          A17_OPT="-O3 -mcpu=apple-a17 -target arm64-apple-ios16.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -ffp-contract=fast -fno-math-errno"
+          # 【Eコア専用調律フラグ】
+          # 1. -mcpu=apple-m4: M4命令セット（ARMv9）をフル活用
+          # 2. -flto=thin: リンク時最適化
+          # 3. -falign-functions=128: 128バイトキャッシュライン整列
+          # 4. -mllvm -inline-threshold=350: L1i(128KB)にジャストフィットさせる上品なインライン化
+          # 5. -ffp-contract=fast: NEONポートでのFMA積和演算を解放
+          # 6. -fno-math-errno: 数学関数のインライン化促進
+          # ※過剰な -funroll-loops は意図的に除外（EコアのROB詰まり防止）
+          ECORE_OPT="-O3 -mcpu=apple-m4 -flto=thin -falign-functions=128 -mllvm -inline-threshold=350 -ffp-contract=fast -fno-math-errno -mmacosx-version-min=15.0"
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
+            -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
+            -DCMAKE_OSX_SYSROOT="$SYSROOT" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="15.0" \
             -DBOINC_DIR=../boinc/boinc \
             -DBOINC_APPLICATION=ON \
             -DNBODY=ON \
             -DSEPARATION=OFF \
-            -DNBODY_OPENMP=OFF \
+            -DNBODY_OPENMP=ON \
             -DNBODY_GL=OFF \
+            -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_OPT $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_OPT $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$ECORE_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$ECORE_OPT -I/opt/homebrew/opt/libomp/include $CLANG_PERMISSIVE"
 
-      - name: Build MilkyWay N-Body dylib
+      - name: Compile & Link N-body (Static libomp & E-Core Tuned)
         run: |
           cd source/build
 
-          # 不要なLinuxリンカーオプションの除去
-          find . -name "link.txt" | while read -r linkfile; do
-            sed -i '' 's/-Wl,--start-group//g' "$linkfile"
-            sed -i '' 's/-Wl,--end-group//g' "$linkfile"
-            sed -i '' 's/-libstdc++//g' "$linkfile"
-            sed -i '' 's/-static//g' "$linkfile"
-          done
+          make -j$(sysctl -n hw.ncpu) || true
 
-          # ビルド実行
-          make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
+          TARGET_LINK="nbody/CMakeFiles/milkyway_nbody.dir/link.txt"
+          if [ -f "$TARGET_LINK" ]; then
+            echo "=== Patching $TARGET_LINK for E-Core ==="
+            sed -i '' 's/-Wl,--start-group//g; s/-Wl,--end-group//g; s/--start-group//g; s/--end-group//g' "$TARGET_LINK"
+            sed -i '' 's/-libstdc++//g; s/-static//g' "$TARGET_LINK"
+            sed -i '' 's/-mmacosx-version-min=[0-9.]*/-mmacosx-version-min=15.0/g' "$TARGET_LINK"
+            
+            # dylibの代わりに「静的ライブラリ（libomp.a）」を直接結合！
+            # これにより間接参照テーブル（PLT/GOT）を排除し、Eコアの分岐ミスを極小化
+            sed -i '' 's|$| -flto=thin /opt/homebrew/opt/libomp/lib/libomp.a|' "$TARGET_LINK"
 
-          echo "=== Built dylib Info ==="
-          DYLIB_FILE=$(find . -name "*milkyway_nbody*.dylib" | head -n 1)
-          ls -lh "$DYLIB_FILE"
-          file "$DYLIB_FILE"
-          otool -L "$DYLIB_FILE"
-          nm -gU "$DYLIB_FILE" | grep milkyway_nbody_entry || true
+            echo "=== Executing E-Core Link Command ==="
+            (cd nbody && bash -c "$(cat CMakeFiles/milkyway_nbody.dir/link.txt)")
+          fi
 
-      - name: Upload A17 Pro dylib
+          echo "=== Built Binaries ==="
+          ls -lh bin/* || ls -lh nbody/* || ls -lh *milkyway* || true
+          file bin/milkyway_nbody || file nbody/milkyway_nbody || true
+
+          # 依存関係の確認（libomp.dylib が消えて完全自己完結しているか確認）
+          echo "=== Dynamic Library Dependencies ==="
+          otool -L bin/milkyway_nbody || true
+
+      - name: Upload E-Core Binary
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: milkyway_nbody_a17pro_dylib
+          name: milkyway_nbody_m4_ecore
           path: |
-            source/build/**/*milkyway_nbody*.dylib
+            source/build/bin/
+            source/build/nbody/
