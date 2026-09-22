@@ -201,14 +201,19 @@ jobs:
                       if brace_pos != -1:
                           inject = '''
                           static int step_cnt = 0;
+                          #ifdef __cplusplus
+                          extern "C"
+                          #endif
+                          __attribute__((weak)) void nebula_direct_progress(double x);
+                          if (nebula_direct_progress) nebula_direct_progress(-1.0);
                           if (++step_cnt % 500 == 0) {
-                              fprintf(stderr, \"[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\\\n\");
+                              fprintf(stderr, "[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\n");
                               fflush(stderr);
                           }'''
                           c = c[:brace_pos+1] + inject + c[brace_pos+1:]
                           with open(fpath, 'w', encoding='utf-8') as f:
                               f.write(c)
-                          print('>>> [SUCCESS] Patched orbit integrator progress!')
+                          print('>>> [SUCCESS] Patched orbit integrator progress and abort hook!')
                           break
 
           fpath2 = 'nbody/src/nbody.c'
