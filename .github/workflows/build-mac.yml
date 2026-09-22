@@ -264,11 +264,10 @@ jobs:
           A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           
-          # -inline-threshold=3000 はそのまま維持
-          A17_OPT_FLAGS="-funroll-loops -mllvm -inline-threshold=3000 -fmerge-all-constants -fstrict-aliasing -fno-semantic-interposition"
-          A17_LTO="-flto=full"
+          # ★ 修正: -fno-semantic-interposition を削除し、LTO を thin に変更
+          A17_OPT_FLAGS="-funroll-loops -mllvm -inline-threshold=3000 -fmerge-all-constants -fstrict-aliasing"
+          A17_LTO="-flto=thin"
           
-          # ★ OpenMP ヘッダー・フラグの注入
           OPENMP_FLAGS="-Xclang -fopenmp -I$GITHUB_WORKSPACE/openmp_ios/include"
           A17_FULL_OPT="$A17_ARCH $A17_PRECISION $A17_OPT_FLAGS $A17_LTO $OPENMP_FLAGS"
           
