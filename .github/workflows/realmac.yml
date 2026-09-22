@@ -4,6 +4,43 @@ on:
   push:
   workflow_dispatch:
 
+# ==============================================================================
+# M4 E-Core 全域共有パラメータ（YAMLの共通定義として集約）
+# ==============================================================================
+env:
+  # 1. コンパイル最適化フラグ
+  # -mcpu=apple-m4: M4命令セット（ARMv9）最適化
+  # -flto=thin: リンク時最適化（CRLIBM境界消滅）
+  # -falign-functions=128: 128Byteキャッシュライン整列
+  # -mllvm -inline-threshold=350: L1i(128KB)に収めるインライン展開
+  # -mllvm -unroll-threshold=40 / -mllvm -prefer-vector-width=128: Eコアパイプライン最適化
+  # -ffp-contract=fast: NEONでのFMA（積和演算）解放
+  # -fno-math-errno: 数学関数のインライン化促進
+  # -fvectorize -fslp-vectorize: 自動ベクター化の強化
+  ECORE_OPT: >-
+    -O3
+    -mcpu=apple-m4
+    -flto=thin
+    -falign-functions=128
+    -falign-loops=32
+    -mllvm -align-all-nofallthru-blocks=32
+    -mllvm -inline-threshold=350
+    -mllvm -unroll-threshold=40
+    -mllvm -prefer-vector-width=128
+    -ffp-contract=fast
+    -fno-math-errno
+    -fvectorize
+    -fslp-vectorize
+    -fomit-frame-pointer
+    -mmacosx-version-min=15.0
+
+  # 2. OpenMP / M4 E-Core ランタイム制御（実行時環境変数の埋め込み準備）
+  # ※実行時スクリプト等から参照できるよう定義
+  OMP_NUM_THREADS: "4"
+  OMP_PLACES: "cores"
+  OMP_PROC_BIND: "close"
+  KMP_BLOCKTIME: "0"
+
 jobs:
   build-test:
     runs-on: xcode-27
@@ -41,8 +78,8 @@ jobs:
             --enable-libraries \
             --disable-shared \
             --enable-static \
-            CFLAGS="-O3 -arch arm64 -flto=thin -Wno-error" \
-            CXXFLAGS="-O3 -arch arm64 -flto=thin -Wno-error"
+            CFLAGS="$ECORE_OPT -Wno-error" \
+            CXXFLAGS="$ECORE_OPT -Wno-error"
 
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
@@ -56,16 +93,6 @@ jobs:
           mkdir -p build && cd build
           SYSROOT=$(xcrun --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
-
-          # 【Eコア専用調律フラグ】
-          # 1. -mcpu=apple-m4: M4命令セット（ARMv9）をフル活用
-          # 2. -flto=thin: リンク時最適化
-          # 3. -falign-functions=128: 128バイトキャッシュライン整列
-          # 4. -mllvm -inline-threshold=350: L1i(128KB)にジャストフィットさせる上品なインライン化
-          # 5. -ffp-contract=fast: NEONポートでのFMA積和演算を解放
-          # 6. -fno-math-errno: 数学関数のインライン化促進
-          # ※過剰な -funroll-loops は意図的に除外（EコアのROB詰まり防止）
-          ECORE_OPT="-O3 -mcpu=apple-m4 -flto=thin -falign-functions=128 -mllvm -inline-threshold=350 -ffp-contract=fast -fno-math-errno -mmacosx-version-min=15.0"
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -96,8 +123,7 @@ jobs:
             sed -i '' 's/-libstdc++//g; s/-static//g' "$TARGET_LINK"
             sed -i '' 's/-mmacosx-version-min=[0-9.]*/-mmacosx-version-min=15.0/g' "$TARGET_LINK"
             
-            # dylibの代わりに「静的ライブラリ（libomp.a）」を直接結合！
-            # これにより間接参照テーブル（PLT/GOT）を排除し、Eコアの分岐ミスを極小化
+            # dylibの代わりに「静的ライブラリ（libomp.a）」を直接結合
             sed -i '' 's|$| -flto=thin /opt/homebrew/opt/libomp/lib/libomp.a|' "$TARGET_LINK"
 
             echo "=== Executing E-Core Link Command ==="
