@@ -1,4 +1,4 @@
-name: Build MilkyWay A17 Pro iOS Native
+name: Build MilkyWay M4 macOS Native
 
 on:
   push:
