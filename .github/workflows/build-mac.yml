@@ -219,11 +219,12 @@ jobs:
             sed -i '' 's/-Wl,--end-group//g' "$linkfile"
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
-          done
-
-          # ★【安全な修正】dylib(共有ライブラリ)の link.txt のリンク行にだけ dynamic_lookup を注入
-          find nbody -name "link.txt" | while read -r linkfile; do
-            sed -i '' 's/$/ -Wl,-undefined,dynamic_lookup/g' "$linkfile"
+            
+            # ★【完全確実な判定】ar コマンド(静的ライブラリ)ではない、C++/Clang リンカー行にだけ dynamic_lookup を注入！
+            if ! grep -q "/ar " "$linkfile"; then
+              sed -i '' 's/$/ -Wl,-undefined,dynamic_lookup/g' "$linkfile"
+              echo "Injected dynamic_lookup into: $linkfile"
+            fi
           done
 
           make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
