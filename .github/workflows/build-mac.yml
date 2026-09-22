@@ -90,14 +90,24 @@ jobs:
                   c = f.read()
               
               old_finish = 'int boinc_finish(int status) {'
-              new_finish = '''int boinc_finish(int status) {
-                  fprintf(stderr, \"[Nebula-Dylib] Intercepted boinc_finish(%d) -> Force Clean Exit\\\\n\", status);
+              new_finish = '''#ifdef __cplusplus
+              extern \"C\" {
+              #endif
+              __attribute__((weak)) void nebula_force_exit(int status);
+              #ifdef __cplusplus
+              }
+              #endif
+              int boinc_finish(int status) {
+                  fprintf(stderr, \"[Nebula-Dylib] Intercepted boinc_finish(%d) -> Escaping to Swift!\\\\n\", status);
                   fflush(stderr);
+                  if (nebula_force_exit) {
+                      nebula_force_exit(status);
+                  }
                   exit(status);
               '''
               if old_finish in c:
                   c = c.replace(old_finish, new_finish, 1)
-                  print('>>> [SUCCESS] Patched boinc_finish!')
+                  print('>>> [SUCCESS] Patched boinc_finish with direct escape!')
               
               old_frac = 'int boinc_fraction_done(double x) {'
               new_frac = '''#ifdef __cplusplus
