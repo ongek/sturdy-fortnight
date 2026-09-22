@@ -8,15 +8,7 @@ on:
 # M4 E-Core 全域共有パラメータ（YAMLの共通定義として集約）
 # ==============================================================================
 env:
-  # 1. コンパイル最適化フラグ
-  # -mcpu=apple-m4: M4命令セット（ARMv9）最適化
-  # -flto=thin: リンク時最適化（CRLIBM境界消滅）
-  # -falign-functions=128: 128Byteキャッシュライン整列
-  # -mllvm -inline-threshold=350: L1i(128KB)に収めるインライン展開
-  # -mllvm -unroll-threshold=40 / -mllvm -prefer-vector-width=128: Eコアパイプライン最適化
-  # -ffp-contract=fast: NEONでのFMA（積和演算）解放
-  # -fno-math-errno: 数学関数のインライン化促進
-  # -fvectorize -fslp-vectorize: 自動ベクター化の強化
+  # -mllvm -prefer-vector-width=128 を削除し、-mcpu=apple-m4 に任せる形に修正
   ECORE_OPT: >-
     -O3
     -mcpu=apple-m4
@@ -26,7 +18,6 @@ env:
     -mllvm -align-all-nofallthru-blocks=32
     -mllvm -inline-threshold=350
     -mllvm -unroll-threshold=40
-    -mllvm -prefer-vector-width=128
     -ffp-contract=fast
     -fno-math-errno
     -fvectorize
