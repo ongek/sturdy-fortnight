@@ -188,8 +188,11 @@ jobs:
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
-          python3 -c "
+          # ★ python3 << 'EOF' により Bash のクォート破壊を完全に回避
+          python3 << 'EOF'
           import os
+          
+          # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
           fpath = 'nbody/src/nbody_orbit_integrator.c'
           if os.path.exists(fpath):
               with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -199,7 +202,7 @@ jobs:
                       pos = c.find(pattern)
                       brace_pos = c.find('{', pos)
                       if brace_pos != -1:
-                          inject = '''
+                          inject = """
                           static int step_cnt = 0;
                           #ifdef __cplusplus
                           extern "C"
@@ -209,13 +212,14 @@ jobs:
                           if (++step_cnt % 500 == 0) {
                               fprintf(stderr, "[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\n");
                               fflush(stderr);
-                          }'''
+                          }"""
                           c = c[:brace_pos+1] + inject + c[brace_pos+1:]
                           with open(fpath, 'w', encoding='utf-8') as f:
                               f.write(c)
                           print('>>> [SUCCESS] Patched orbit integrator progress and abort hook!')
                           break
 
+          # ② 11万体の星の生成進捗
           fpath2 = 'nbody/src/nbody.c'
           if os.path.exists(fpath2):
               with open(fpath2, 'r', encoding='utf-8', errors='ignore') as f:
@@ -225,43 +229,41 @@ jobs:
                       pos = c2.find(pattern)
                       brace_pos = c2.find('{', pos)
                       if brace_pos != -1:
-                          inject = '''
+                          inject = """
                           if (i % 20000 == 0) {
-                              fprintf(stderr, \"[Preprocess-Bodies] 天体データ生成中... (%d / %d 体)\\\\n\", (int)i, (int)n_bodies);
+                              fprintf(stderr, "[Preprocess-Bodies] 天体データ生成中... (%d / %d 体)\\n", (int)i, (int)n_bodies);
                               fflush(stderr);
-                          }'''
+                          }"""
                           c2 = c2[:brace_pos+1] + inject + c2[brace_pos+1:]
                           with open(fpath2, 'w', encoding='utf-8') as f:
                               f.write(c2)
                           print('>>> [SUCCESS] Patched body generator progress!')
                           break
-          "
-          
-          python3 -c "
-          import os
-          fpath = 'lua/src/loslib.c'
-          if os.path.exists(fpath):
-              with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                  c = f.read()
-              c = c.replace('system(luaL_optstring(L, 1, NULL))', '-1')
-              with open(fpath, 'w', encoding='utf-8') as f:
-                  f.write(c)
-          "
-          sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' nbody/CMakeLists.txt
-          sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' nbody/CMakeLists.txt
-          
-          python3 -c "
-          import os
+
+          # ③ Lua の system() コール無効化
+          fpath3 = 'lua/src/loslib.c'
+          if os.path.exists(fpath3):
+              with open(fpath3, 'r', encoding='utf-8', errors='ignore') as f:
+                  c3 = f.read()
+              c3 = c3.replace('system(luaL_optstring(L, 1, NULL))', '-1')
+              with open(fpath3, 'w', encoding='utf-8') as f:
+                  f.write(c3)
+
+          # ④ main() のエクスポート名変更
           mpath = 'nbody/src/main.c'
           if os.path.exists(mpath):
               with open(mpath, 'r', encoding='utf-8', errors='ignore') as f:
-                  c = f.read()
-              c = c.replace('int main(int argc, char **argv)', '__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)')
-              c = c.replace('int main(int argc, char *argv[])', '__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)')
+                  m = f.read()
+              m = m.replace('int main(int argc, char **argv)', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
+              m = m.replace('int main(int argc, char *argv[])', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
               with open(mpath, 'w', encoding='utf-8') as f:
-                  f.write(c)
+                  f.write(m)
               print('Successfully renamed main() to exported milkyway_nbody_entry()')
-          "
+          EOF
+
+          sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' nbody/CMakeLists.txt
+          sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' nbody/CMakeLists.txt
+
           mkdir -p build && cd build
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
@@ -269,14 +271,13 @@ jobs:
           A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           
-          # ★ 修正: -fno-semantic-interposition を削除し、LTO を thin に変更
+          # クラッシュ回避のため -flto=thin に設定し、-inline-threshold=3000 を維持
           A17_OPT_FLAGS="-funroll-loops -mllvm -inline-threshold=3000 -fmerge-all-constants -fstrict-aliasing"
           A17_LTO="-flto=thin"
           
           OPENMP_FLAGS="-Xclang -fopenmp -I$GITHUB_WORKSPACE/openmp_ios/include"
           A17_FULL_OPT="$A17_ARCH $A17_PRECISION $A17_OPT_FLAGS $A17_LTO $OPENMP_FLAGS"
           
-          # ★ NBODY_OPENMP を ON に変更
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
