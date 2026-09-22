@@ -226,17 +226,18 @@ jobs:
 
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          # 1. ARMv8.6-A & 128バイト キャッシュライン物理整合 (L1/L2キャッシュライン最適化)
-          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32 -falign-data=128"
+          # 1. ARMv8.6-A & 命令・ループキャッシュ境界整合 (128B Cache / 32B Loop)
+          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32"
           
-          # 2. 科学的精度 100% 保証（結合法則を崩さず、ハードウェア FSQRT/FMLA を直撃）
+          # 2. 科学的精度 100% 保証（IEEE-754維持 / ハードウェア FSQRT・FMLA 直撃）
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           
           # 3. L1-I (192KB) & L1-D (128KB) 特化チューニング
-          #    ・-inline-threshold=3000: 巨大L1-I(192KB)の余裕を使い前処理・Lua・乱数・数学関数を全展開
-          #    ・-funroll-loops: 4並列SIMDパイプラインを飽和させるループアンローリング
+          #    ・-inline-threshold=3000: 巨大L1-I(192KB)を活かして前処理・Lua・乱数・数学関数を全インライン化
+          #    ・-funroll-loops: 4並列SIMDパイプラインを飽和させるループ展開
           #    ・-fmerge-all-constants: 128KB L1-D内に定数・三角関数テーブルを完全固定
-          #    ・-fstrict-aliasing: A17 ProのBranchless命令(CSEL/FCSEL)出力を促進
+          #    ・-fstrict-aliasing: A17 ProのBranchless命令(CSEL/FCSEL)出力を最大化
+          #    ・-fno-semantic-interposition: dylib内の関数間呼び出しを直接ジャンプ化
           A17_OPT_FLAGS="-funroll-loops -mllvm -inline-threshold=3000 -fmerge-all-constants -fstrict-aliasing -fno-semantic-interposition"
           
           # 4. ★Full LTO（ファイル境界を消滅させ、L2 16MBキャッシュ内で完結する単一巨大コード生成）
