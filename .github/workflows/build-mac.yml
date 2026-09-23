@@ -191,6 +191,19 @@ jobs:
           python3 << 'EOF'
           import os
           
+          # ★【最重要修正】nbody_grav.c の OpenMP データ共有バグを完全修正
+          fpath_grav = 'nbody/src/nbody_grav.c'
+          if os.path.exists(fpath_grav):
+              with open(fpath_grav, 'r', encoding='utf-8', errors='ignore') as f:
+                  cg = f.read()
+              # 2箇所の #pragma omp parallel for に default(shared) を注入
+              old_omp = '#pragma omp parallel for private(i, b, a, externAcc) shared(bodies, accels)'
+              new_omp = '#pragma omp parallel for default(shared) private(i, b, a, externAcc)'
+              cg = cg.replace(old_omp, new_omp)
+              with open(fpath_grav, 'w', encoding='utf-8') as f:
+                  f.write(cg)
+              print('>>> [SUCCESS] Patched nbody_grav.c with default(shared)!')
+
           # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
           fpath = 'nbody/src/nbody_orbit_integrator.c'
           if os.path.exists(fpath):
@@ -267,7 +280,7 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          # ★【確定】ARM64 メモリ整合性 ＆ 厳格アラインメント指定
+          # ARM64 堅牢最適化フラグ
           A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fno-strict-aliasing -fno-omit-frame-pointer -mllvm -aarch64-enable-atomic-cfg-tidy=false"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           OPENMP_FLAGS="-Xclang -fopenmp -I$GITHUB_WORKSPACE/openmp_ios/include"
