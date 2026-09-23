@@ -184,110 +184,108 @@ jobs:
 
       - name: Configure MilkyWay CMake for dylib (True Dual-Core OpenMP)
         run: |
-          cd source
+          cd "$GITHUB_WORKSPACE/source"
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
           python3 << 'EOF'
-          import os
+          import os, re
           
-          # ★【確実置換版】nbody_grav.c の OpenMP データ共有バグを完全修正
-          import re
-          fpath_grav = 'nbody/src/nbody_grav.c'
-          if os.path.exists(fpath_grav):
-              with open(fpath_grav, 'r', encoding='utf-8', errors='ignore') as f:
-                  cg = f.read()
+          # ★ 絶対パスで nbody_grav.c を指定
+          ws = os.environ['GITHUB_WORKSPACE']
+          fpath_grav = os.path.join(ws, 'source/nbody/src/nbody_grav.c')
+          
+          with open(fpath_grav, 'r', encoding='utf-8') as f:
+              cg = f.read()
+          
+          pattern = r'#pragma\s+omp\s+parallel\s+for\s+private\(i,\s*b,\s*a,\s*externAcc\)\s+shared\(bodies,\s*accels\)'
+          replacement = '#pragma omp parallel for default(shared) private(i, b, a, externAcc)'
+          
+          new_cg, count = re.subn(pattern, replacement, cg)
+          if count == 0:
+              print(f">>> [FATAL ERROR] Failed to patch {fpath_grav}!")
+              exit(1)
               
-              # 正規表現で shared(bodies, accels) を default(shared) に確実に置換
-              pattern = r'#pragma\s+omp\s+parallel\s+for\s+private\(i,\s*b,\s*a,\s*externAcc\)\s+shared\(bodies,\s*accels\)'
-              replacement = '#pragma omp parallel for default(shared) private(i, b, a, externAcc)'
-              
-              new_cg, count = re.subn(pattern, replacement, cg)
-              if count > 0:
-                  with open(fpath_grav, 'w', encoding='utf-8') as f:
-                      f.write(new_cg)
-                  print(f'>>> [SUCCESS] Successfully patched nbody_grav.c in {count} places!')
-              else:
-                  print('>>> [ERROR] Pattern not found in nbody_grav.c!')
-                  exit(1) # 置換に失敗したらビルドを止めて気付かせる
-
+          with open(fpath_grav, 'w', encoding='utf-8') as f:
+              f.write(new_cg)
+          print(f'>>> [SUCCESS] Successfully patched {fpath_grav} in {count} places!')
+          
           # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
-          fpath = 'nbody/src/nbody_orbit_integrator.c'
-          if os.path.exists(fpath):
-              with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                  c = f.read()
-              for pattern in ['while (t < t_end)', 'while (t > t_end)']:
-                  if pattern in c:
-                      pos = c.find(pattern)
-                      brace_pos = c.find('{', pos)
-                      if brace_pos != -1:
-                          inject = """
-                          static int step_cnt = 0;
-                          #ifdef __cplusplus
-                          extern "C"
-                          #endif
-                          __attribute__((weak)) void nebula_direct_progress(double x);
-                          if (nebula_direct_progress) nebula_direct_progress(-1.0);
-                          if (++step_cnt % 500 == 0) {
-                              fprintf(stderr, "[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\n");
-                              fflush(stderr);
-                          }"""
-                          c = c[:brace_pos+1] + inject + c[brace_pos+1:]
-                          with open(fpath, 'w', encoding='utf-8') as f:
-                              f.write(c)
-                          print('>>> [SUCCESS] Patched orbit integrator progress and abort hook!')
-                          break
+          fpath = os.path.join(ws, 'source/nbody/src/nbody_orbit_integrator.c')
+          with open(fpath, 'r', encoding='utf-8') as f:
+              c = f.read()
+          for pattern in ['while (t < t_end)', 'while (t > t_end)']:
+              if pattern in c:
+                  pos = c.find(pattern)
+                  brace_pos = c.find('{', pos)
+                  if brace_pos != -1:
+                      inject = """
+                      static int step_cnt = 0;
+                      #ifdef __cplusplus
+                      extern "C"
+                      #endif
+                      __attribute__((weak)) void nebula_direct_progress(double x);
+                      if (nebula_direct_progress) nebula_direct_progress(-1.0);
+                      if (++step_cnt % 500 == 0) {
+                          fprintf(stderr, "[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\n");
+                          fflush(stderr);
+                      }"""
+                      c = c[:brace_pos+1] + inject + c[brace_pos+1:]
+                      with open(fpath, 'w', encoding='utf-8') as f:
+                          f.write(c)
+                      print('>>> [SUCCESS] Patched orbit integrator!')
+                      break
 
           # ② 11万体の星の生成進捗
-          fpath2 = 'nbody/src/nbody.c'
-          if os.path.exists(fpath2):
-              with open(fpath2, 'r', encoding='utf-8', errors='ignore') as f:
-                  c2 = f.read()
-              for pattern in ['for (i = 0; i < n_bodies; i++)', 'for (i = 0; i < n_bodies; ++i)', 'for (int i = 0; i < n_bodies; i++)']:
-                  if pattern in c2:
-                      pos = c2.find(pattern)
-                      brace_pos = c2.find('{', pos)
-                      if brace_pos != -1:
-                          inject = """
-                          if (i % 20000 == 0) {
-                              fprintf(stderr, "[Preprocess-Bodies] 天体データ生成中... (%d / %d 体)\\n", (int)i, (int)n_bodies);
-                              fflush(stderr);
-                          }"""
-                          c2 = c2[:brace_pos+1] + inject + c2[brace_pos+1:]
-                          with open(fpath2, 'w', encoding='utf-8') as f:
-                              f.write(c2)
-                          print('>>> [SUCCESS] Patched body generator progress!')
-                          break
+          fpath2 = os.path.join(ws, 'source/nbody/src/nbody.c')
+          with open(fpath2, 'r', encoding='utf-8') as f:
+              c2 = f.read()
+          for pattern in ['for (i = 0; i < n_bodies; i++)', 'for (i = 0; i < n_bodies; ++i)', 'for (int i = 0; i < n_bodies; i++)']:
+              if pattern in c2:
+                  pos = c2.find(pattern)
+                  brace_pos = c2.find('{', pos)
+                  if brace_pos != -1:
+                      inject = """
+                      if (i % 20000 == 0) {
+                          fprintf(stderr, "[Preprocess-Bodies] 天体データ生成中... (%d / %d 体)\\n", (int)i, (int)n_bodies);
+                          fflush(stderr);
+                      }"""
+                      c2 = c2[:brace_pos+1] + inject + c2[brace_pos+1:]
+                      with open(fpath2, 'w', encoding='utf-8') as f:
+                          f.write(c2)
+                      print('>>> [SUCCESS] Patched body generator!')
+                      break
 
           # ③ Lua の system() コール無効化
-          fpath3 = 'lua/src/loslib.c'
-          if os.path.exists(fpath3):
-              with open(fpath3, 'r', encoding='utf-8', errors='ignore') as f:
-                  c3 = f.read()
-              c3 = c3.replace('system(luaL_optstring(L, 1, NULL))', '-1')
-              with open(fpath3, 'w', encoding='utf-8') as f:
-                  f.write(c3)
+          fpath3 = os.path.join(ws, 'source/lua/src/loslib.c')
+          with open(fpath3, 'r', encoding='utf-8') as f:
+              c3 = f.read()
+          c3 = c3.replace('system(luaL_optstring(L, 1, NULL))', '-1')
+          with open(fpath3, 'w', encoding='utf-8') as f:
+              f.write(c3)
 
           # ④ main() のエクスポート名変更
-          mpath = 'nbody/src/main.c'
-          if os.path.exists(mpath):
-              with open(mpath, 'r', encoding='utf-8', errors='ignore') as f:
-                  m = f.read()
-              m = m.replace('int main(int argc, char **argv)', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
-              m = m.replace('int main(int argc, char *argv[])', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
-              with open(mpath, 'w', encoding='utf-8') as f:
-                  f.write(m)
-              print('Successfully renamed main() to exported milkyway_nbody_entry()')
+          mpath = os.path.join(ws, 'source/nbody/src/main.c')
+          with open(mpath, 'r', encoding='utf-8') as f:
+              m = f.read()
+          m = m.replace('int main(int argc, char **argv)', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
+          m = m.replace('int main(int argc, char *argv[])', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
+          with open(mpath, 'w', encoding='utf-8') as f:
+              f.write(m)
+          print('>>> [SUCCESS] Renamed main()!')
           EOF
 
-          sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' nbody/CMakeLists.txt
-          sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' nbody/CMakeLists.txt
+          # ★ 置換が本当に効いているかログに強制表示
+          echo "=== Verification of nbody_grav.c ==="
+          grep -n "default(shared)" "$GITHUB_WORKSPACE/source/nbody/src/nbody_grav.c"
 
-          mkdir -p build && cd build
+          sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
+          sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
+
+          rm -rf build && mkdir -p build && cd build
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          # ARM64 堅牢最適化フラグ
           A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fno-strict-aliasing -fno-omit-frame-pointer -mllvm -aarch64-enable-atomic-cfg-tidy=false"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           OPENMP_FLAGS="-Xclang -fopenmp -I$GITHUB_WORKSPACE/openmp_ios/include"
@@ -309,17 +307,15 @@ jobs:
 
       - name: Build MilkyWay N-Body dylib
         run: |
-          cd source/build
+          cd "$GITHUB_WORKSPACE/source/build"
           find . -name "link.txt" | while read -r linkfile; do
             sed -i '' 's/-Wl,--start-group//g' "$linkfile"
             sed -i '' 's/-Wl,--end-group//g' "$linkfile"
             sed -i '' 's/-libstdc++//g' "$linkfile"
             sed -i '' 's/-static//g' "$linkfile"
             
-            # ★ ビルドした libomp.a をリンクラインに明示結合
             if ! grep -q "/ar " "$linkfile"; then
               sed -i '' "s|$| $GITHUB_WORKSPACE/openmp_ios/lib/libomp.a -Wl,-undefined,dynamic_lookup|g" "$linkfile"
-              echo "Injected libomp.a and dynamic_lookup into: $linkfile"
             fi
           done
           make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
@@ -327,7 +323,11 @@ jobs:
           DYLIB_FILE=$(find . -name "*milkyway_nbody*.dylib" | head -n 1)
           ls -lh "$DYLIB_FILE"
           file "$DYLIB_FILE"
-          nm -gU "$DYLIB_FILE" | grep -E "omp_" | head -n 10 || true
+          
+          # ★ ビルド直後の UUID をログに強制表示
+          echo "=== New Built UUID ==="
+          dwarfdump -u "$DYLIB_FILE" || otool -l "$DYLIB_FILE" | grep -A 2 LC_UUID
+          
       - name: Upload A17 Pro dylib
         uses: actions/upload-artifact@v4
         if: success()
