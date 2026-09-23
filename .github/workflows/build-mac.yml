@@ -1,4 +1,4 @@
-name: Build MilkyWay A17 Pro iOS Native (GCD Dual-Core PoC)
+name: Build MilkyWay A17 Pro iOS Native (Apple Native GCD)
 
 on:
   push:
@@ -134,7 +134,7 @@ jobs:
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure MilkyWay CMake for dylib (Apple Native GCD Dual-Core)
+      - name: Configure MilkyWay CMake for dylib (Apple Native GCD Integration)
         run: |
           cd "$GITHUB_WORKSPACE/source"
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
@@ -148,8 +148,10 @@ jobs:
           with open(fpath_grav, 'r', encoding='utf-8') as f:
               cg = f.read()
 
+          # Apple 純正 GCD & QoS ヘッダーを注入
+          headers_to_add = "#include <dispatch/dispatch.h>\n#include <pthread/qos.h>\n"
           if '#include <dispatch/dispatch.h>' not in cg:
-              cg = "#include <dispatch/dispatch.h>\n" + cg
+              cg = headers_to_add + cg
 
           start_marker = "static inline void nbMapForceBody(const NBodyCtx* ctx, NBodyState* st)"
           end_marker = "static mwvector nbGravity_Exact"
@@ -186,10 +188,12 @@ jobs:
               "        lmcscale = 1.0;",
               "        lmcscale2 = 1.0;",
               "    }",
+              "    /* Apple 純正 GCD dispatch_apply による完全安全 2 コア並列化 */",
               "    dispatch_apply(2, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t thread_id) {",
-              "        int chunk_size = nbody / 2;",
-              "        int start_i = (int)thread_id * chunk_size;",
-              "        int end_i = (thread_id == 1) ? nbody : chunk_size;",
+              "        pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);",
+              "        int chunk = nbody / 2;",
+              "        int start_i = (int)thread_id * chunk;",
+              "        int end_i = (thread_id == 1) ? nbody : chunk;",
               "        for (int i = start_i; i < end_i; ++i) {",
               "            switch (ctx->potentialType) {",
               "                case EXTERNAL_POTENTIAL_DEFAULT: {",
@@ -227,7 +231,7 @@ jobs:
           cg = cg[:pos1] + "\n".join(new_func) + cg[pos2:]
           with open(fpath_grav, 'w', encoding='utf-8') as f:
               f.write(cg)
-          print('>>> [SUCCESS] nbody_grav.c patched successfully!')
+          print('>>> [SUCCESS] nbody_grav.c patched with Apple Native GCD & QoS!')
 
           # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
           fpath_orb = os.path.join(ws, 'source/nbody/src/nbody_orbit_integrator.c')
@@ -289,7 +293,7 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          # A17 Pro ネイティブ最適化（Blocks 有効化）
+          # A17 Pro ネイティブ最適化（Blocks 有効化・アラインメント整合）
           A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fblocks -falign-functions=128 -falign-loops=32"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           A17_SIMD="-fvectorize -fslp-vectorize -funroll-loops -fstrict-aliasing"
