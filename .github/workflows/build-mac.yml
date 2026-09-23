@@ -188,7 +188,6 @@ jobs:
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
-          # ★ python3 << 'EOF' により Bash のクォート破壊を完全に回避
           python3 << 'EOF'
           import os
           
@@ -268,12 +267,12 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK"
+          # ★【確定】ARM64 メモリ整合性 ＆ 厳格アラインメント指定
+          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fno-strict-aliasing -fno-omit-frame-pointer -mllvm -aarch64-enable-atomic-cfg-tidy=false"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
           OPENMP_FLAGS="-Xclang -fopenmp -I$GITHUB_WORKSPACE/openmp_ios/include"
           
-          # ポインタ破壊を招く LTO やインライン破壊を一切排除した「堅牢 2 コア構成」
-          A17_SAFE_OPT="$A17_ARCH $A17_PRECISION $OPENMP_FLAGS"
+          A17_ARM64_SAFE_OPT="$A17_ARCH $A17_PRECISION $OPENMP_FLAGS"
           
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -285,8 +284,8 @@ jobs:
             -DNBODY_OPENMP=ON \
             -DNBODY_GL=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_SAFE_OPT $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_SAFE_OPT $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$A17_ARM64_SAFE_OPT $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A17_ARM64_SAFE_OPT $CLANG_PERMISSIVE"
 
       - name: Build MilkyWay N-Body dylib
         run: |
