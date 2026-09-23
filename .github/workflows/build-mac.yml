@@ -140,22 +140,17 @@ jobs:
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
-          python3 << 'EOF'
+          cat << 'PYEOF' > patch_nbody.py
           import os
           ws = os.environ['GITHUB_WORKSPACE']
-
-          # ====================================================================
-          # ★【確定版】nbMapForceBody を Apple ネイティブ GCD 2並列版に完全置換
-          # ====================================================================
           fpath_grav = os.path.join(ws, 'source/nbody/src/nbody_grav.c')
+
           with open(fpath_grav, 'r', encoding='utf-8') as f:
               cg = f.read()
 
-          # 冒頭に <dispatch/dispatch.h> を追加
           if '#include <dispatch/dispatch.h>' not in cg:
               cg = "#include <dispatch/dispatch.h>\n" + cg
 
-          # nbMapForceBody 関数全体を安全に置換
           start_marker = "static inline void nbMapForceBody(const NBodyCtx* ctx, NBodyState* st)"
           end_marker = "static mwvector nbGravity_Exact"
 
@@ -163,144 +158,129 @@ jobs:
           pos2 = cg.find(end_marker)
 
           if pos1 == -1 or pos2 == -1:
-              print(">>> [FATAL ERROR] Could not locate nbMapForceBody in nbody_grav.c!")
+              print(">>> [FATAL ERROR] Markers not found in nbody_grav.c!")
               exit(1)
 
-          new_nbMapForceBody = """static inline void nbMapForceBody(const NBodyCtx* ctx, NBodyState* st)
-{
-    const int nbody = st->nbody;
-    mwvector LMCx = ZERO_VECTOR;
-    real lmcmass, lmcscale, lmcscale2;
-    int lmcfunction;
+          new_func = [
+              "static inline void nbMapForceBody(const NBodyCtx* ctx, NBodyState* st)",
+              "{",
+              "    const int nbody = st->nbody;",
+              "    mwvector LMCx = ZERO_VECTOR;",
+              "    real lmcmass, lmcscale, lmcscale2;",
+              "    int lmcfunction;",
+              "    const Body* bodies = mw_assume_aligned(st->bodytab, 16);",
+              "    mwvector* accels = mw_assume_aligned(st->acctab, 16);",
+              "    real curTime = st->step * ctx->timestep;",
+              "    real timeFromStart __attribute__((unused)) = (-1)*ctx->Ntsteps*ctx->timestep + curTime;",
+              "    real barTime = st->step * ctx->timestep - st->previousForwardTime;",
+              "    if (ctx->LMC) {",
+              "        lmcfunction = round(ctx->LMCfunction);",
+              "        LMCx = st->LMCpos;",
+              "        lmcmass = ctx->LMCmass;",
+              "        lmcscale = ctx->LMCscale;",
+              "        lmcscale2 = ctx->LMCscale2;",
+              "    } else {",
+              "        SET_VECTOR(LMCx, 0.0, 0.0, 0.0);",
+              "        lmcfunction = 1;",
+              "        lmcmass = 0.0;",
+              "        lmcscale = 1.0;",
+              "        lmcscale2 = 1.0;",
+              "    }",
+              "    dispatch_apply(2, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t thread_id) {",
+              "        int chunk_size = nbody / 2;",
+              "        int start_i = (int)thread_id * chunk_size;",
+              "        int end_i = (thread_id == 1) ? nbody : chunk_size;",
+              "        for (int i = start_i; i < end_i; ++i) {",
+              "            switch (ctx->potentialType) {",
+              "                case EXTERNAL_POTENTIAL_DEFAULT: {",
+              "                    const Body* b = &bodies[i];",
+              "                    mwvector a = nbGravity(ctx, st, b);",
+              "                    mwvector externAcc = mw_addv(nbExtAcceleration(&ctx->pot, Pos(b), barTime),",
+              "                                                 LMCAcceleration(lmcfunction, Pos(b), LMCx, lmcmass, lmcscale, lmcscale2));",
+              "                    mw_incaddv(a, externAcc);",
+              "                    accels[i] = a;",
+              "                    break;",
+              "                }",
+              "                case EXTERNAL_POTENTIAL_NONE: {",
+              "                    accels[i] = nbGravity(ctx, st, &bodies[i]);",
+              "                    break;",
+              "                }",
+              "                case EXTERNAL_POTENTIAL_CUSTOM_LUA: {",
+              "                    mwvector a = nbGravity(ctx, st, &bodies[i]);",
+              "                    mwvector externAcc = ZERO_VECTOR;",
+              "                    nbEvalPotentialClosure(st, Pos(&bodies[i]), &externAcc);",
+              "                    mw_incaddv(externAcc, LMCAcceleration(lmcfunction, Pos(&bodies[i]), LMCx, lmcmass, lmcscale, lmcscale2));",
+              "                    mw_incaddv(a, externAcc);",
+              "                    accels[i] = a;",
+              "                    break;",
+              "                }",
+              "                default:",
+              "                    mw_fail(\"Bad external potential type: %d\\n\", ctx->potentialType);",
+              "            }",
+              "        }",
+              "    });",
+              "}",
+              "",
+              ""
+          ]
 
-    const Body* bodies = mw_assume_aligned(st->bodytab, 16);
-    mwvector* accels = mw_assume_aligned(st->acctab, 16);
-    real curTime = st->step * ctx->timestep;
-    real timeFromStart __attribute__((unused)) = (-1)*ctx->Ntsteps*ctx->timestep + curTime;
-    real barTime = st->step * ctx->timestep - st->previousForwardTime;
-
-    if (ctx->LMC) {
-        lmcfunction = round(ctx->LMCfunction);
-        LMCx = st->LMCpos;
-        lmcmass = ctx->LMCmass;
-        lmcscale = ctx->LMCscale;
-        lmcscale2 = ctx->LMCscale2;
-    } else {
-        SET_VECTOR(LMCx, 0.0, 0.0, 0.0);
-        lmcfunction = 1;
-        lmcmass = 0.0;
-        lmcscale = 1.0;
-        lmcscale2 = 1.0;
-    }
-
-    // ★ Apple Native GCD: 11万体の星を 2つの P-Core で均等に山分け並列計算
-    dispatch_apply(2, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t thread_id) {
-        int chunk_size = nbody / 2;
-        int start_i = (int)thread_id * chunk_size;
-        int end_i = (thread_id == 1) ? nbody : chunk_size;
-
-        for (int i = start_i; i < end_i; ++i)
-        {
-            switch (ctx->potentialType)
-            {
-                case EXTERNAL_POTENTIAL_DEFAULT: {
-                    const Body* b = &bodies[i];
-                    mwvector a = nbGravity(ctx, st, b);
-                    mwvector externAcc = mw_addv(nbExtAcceleration(&ctx->pot, Pos(b), barTime),
-                                                 LMCAcceleration(lmcfunction, Pos(b), LMCx, lmcmass, lmcscale, lmcscale2));
-                    mw_incaddv(a, externAcc);
-                    accels[i] = a;
-                    break;
-                }
-                case EXTERNAL_POTENTIAL_NONE: {
-                    accels[i] = nbGravity(ctx, st, &bodies[i]);
-                    break;
-                }
-                case EXTERNAL_POTENTIAL_CUSTOM_LUA: {
-                    mwvector a = nbGravity(ctx, st, &bodies[i]);
-                    mwvector externAcc = ZERO_VECTOR;
-                    nbEvalPotentialClosure(st, Pos(&bodies[i]), &externAcc);
-                    mw_incaddv(externAcc, LMCAcceleration(lmcfunction, Pos(&bodies[i]), LMCx, lmcmass, lmcscale, lmcscale2));
-                    mw_incaddv(a, externAcc);
-                    accels[i] = a;
-                    break;
-                }
-                default:
-                    mw_fail("Bad external potential type: %d\\n", ctx->potentialType);
-            }
-        }
-    });
-}
-
-"""
-
-          cg = cg[:pos1] + new_nbMapForceBody + cg[pos2:]
-
+          cg = cg[:pos1] + "\n".join(new_func) + cg[pos2:]
           with open(fpath_grav, 'w', encoding='utf-8') as f:
               f.write(cg)
-          print('>>> [SUCCESS] Perfectly replaced nbMapForceBody with Apple Native GCD in nbody_grav.c!')
+          print('>>> [SUCCESS] nbody_grav.c patched successfully!')
 
           # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
-          fpath = os.path.join(ws, 'source/nbody/src/nbody_orbit_integrator.c')
-          with open(fpath, 'r', encoding='utf-8') as f:
+          fpath_orb = os.path.join(ws, 'source/nbody/src/nbody_orbit_integrator.c')
+          with open(fpath_orb, 'r', encoding='utf-8') as f:
               c = f.read()
           for pattern in ['while (t < t_end)', 'while (t > t_end)']:
               if pattern in c:
                   pos = c.find(pattern)
                   brace_pos = c.find('{', pos)
                   if brace_pos != -1:
-                      inject = """
-                      static int step_cnt = 0;
-                      #ifdef __cplusplus
-                      extern "C"
-                      #endif
-                      __attribute__((weak)) void nebula_direct_progress(double x);
-                      if (nebula_direct_progress) nebula_direct_progress(-1.0);
-                      if (++step_cnt % 500 == 0) {
-                          fprintf(stderr, "[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\n");
-                          fflush(stderr);
-                      }"""
+                      inject = "\nstatic int step_cnt = 0;\n#ifdef __cplusplus\nextern \"C\"\n#endif\n__attribute__((weak)) void nebula_direct_progress(double x);\nif (nebula_direct_progress) nebula_direct_progress(-1.0);\nif (++step_cnt % 500 == 0) {\nfprintf(stderr, \"[Preprocess-Orbit] 矮小銀河の軌道を逆積分中...\\n\");\nfflush(stderr);\n}\n"
                       c = c[:brace_pos+1] + inject + c[brace_pos+1:]
-                      with open(fpath, 'w', encoding='utf-8') as f:
+                      with open(fpath_orb, 'w', encoding='utf-8') as f:
                           f.write(c)
+                      print('>>> [SUCCESS] orbit integrator patched!')
                       break
 
           # ② 11万体の星の生成進捗
-          fpath2 = os.path.join(ws, 'source/nbody/src/nbody.c')
-          with open(fpath2, 'r', encoding='utf-8') as f:
+          fpath_body = os.path.join(ws, 'source/nbody/src/nbody.c')
+          with open(fpath_body, 'r', encoding='utf-8') as f:
               c2 = f.read()
           for pattern in ['for (i = 0; i < n_bodies; i++)', 'for (i = 0; i < n_bodies; ++i)', 'for (int i = 0; i < n_bodies; i++)']:
               if pattern in c2:
                   pos = c2.find(pattern)
                   brace_pos = c2.find('{', pos)
                   if brace_pos != -1:
-                      inject = """
-                      if (i % 20000 == 0) {
-                          fprintf(stderr, "[Preprocess-Bodies] 天体データ生成中... (%d / %d 体)\\n", (int)i, (int)n_bodies);
-                          fflush(stderr);
-                      }"""
+                      inject = "\nif (i % 20000 == 0) {\nfprintf(stderr, \"[Preprocess-Bodies] 天体データ生成中... (%d / %d 体)\\n\", (int)i, (int)n_bodies);\nfflush(stderr);\n}\n"
                       c2 = c2[:brace_pos+1] + inject + c2[brace_pos+1:]
-                      with open(fpath2, 'w', encoding='utf-8') as f:
+                      with open(fpath_body, 'w', encoding='utf-8') as f:
                           f.write(c2)
+                      print('>>> [SUCCESS] body generator patched!')
                       break
 
           # ③ Lua の system() コール無効化
-          fpath3 = os.path.join(ws, 'source/lua/src/loslib.c')
-          with open(fpath3, 'r', encoding='utf-8') as f:
+          fpath_lua = os.path.join(ws, 'source/lua/src/loslib.c')
+          with open(fpath_lua, 'r', encoding='utf-8') as f:
               c3 = f.read()
           c3 = c3.replace('system(luaL_optstring(L, 1, NULL))', '-1')
-          with open(fpath3, 'w', encoding='utf-8') as f:
+          with open(fpath_lua, 'w', encoding='utf-8') as f:
               f.write(c3)
 
           # ④ main() のエクスポート名変更
-          mpath = os.path.join(ws, 'source/nbody/src/main.c')
-          with open(mpath, 'r', encoding='utf-8') as f:
+          fpath_main = os.path.join(ws, 'source/nbody/src/main.c')
+          with open(fpath_main, 'r', encoding='utf-8') as f:
               m = f.read()
           m = m.replace('int main(int argc, char **argv)', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
           m = m.replace('int main(int argc, char *argv[])', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
-          with open(mpath, 'w', encoding='utf-8') as f:
+          with open(fpath_main, 'w', encoding='utf-8') as f:
               f.write(m)
-          EOF
+          print('>>> [SUCCESS] main renamed!')
+          PYEOF
+
+          python3 patch_nbody.py
 
           sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
           sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
