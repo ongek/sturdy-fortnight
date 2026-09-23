@@ -191,18 +191,25 @@ jobs:
           python3 << 'EOF'
           import os
           
-          # ★【最重要修正】nbody_grav.c の OpenMP データ共有バグを完全修正
+          # ★【確実置換版】nbody_grav.c の OpenMP データ共有バグを完全修正
+          import re
           fpath_grav = 'nbody/src/nbody_grav.c'
           if os.path.exists(fpath_grav):
               with open(fpath_grav, 'r', encoding='utf-8', errors='ignore') as f:
                   cg = f.read()
-              # 2箇所の #pragma omp parallel for に default(shared) を注入
-              old_omp = '#pragma omp parallel for private(i, b, a, externAcc) shared(bodies, accels)'
-              new_omp = '#pragma omp parallel for default(shared) private(i, b, a, externAcc)'
-              cg = cg.replace(old_omp, new_omp)
-              with open(fpath_grav, 'w', encoding='utf-8') as f:
-                  f.write(cg)
-              print('>>> [SUCCESS] Patched nbody_grav.c with default(shared)!')
+              
+              # 正規表現で shared(bodies, accels) を default(shared) に確実に置換
+              pattern = r'#pragma\s+omp\s+parallel\s+for\s+private\(i,\s*b,\s*a,\s*externAcc\)\s+shared\(bodies,\s*accels\)'
+              replacement = '#pragma omp parallel for default(shared) private(i, b, a, externAcc)'
+              
+              new_cg, count = re.subn(pattern, replacement, cg)
+              if count > 0:
+                  with open(fpath_grav, 'w', encoding='utf-8') as f:
+                      f.write(new_cg)
+                  print(f'>>> [SUCCESS] Successfully patched nbody_grav.c in {count} places!')
+              else:
+                  print('>>> [ERROR] Pattern not found in nbody_grav.c!')
+                  exit(1) # 置換に失敗したらビルドを止めて気付かせる
 
           # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
           fpath = 'nbody/src/nbody_orbit_integrator.c'
