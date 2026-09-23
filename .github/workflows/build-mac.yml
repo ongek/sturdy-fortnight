@@ -221,13 +221,12 @@ jobs:
           
           # 3. L1D Miss 削減 ＆ Advanced SIMD / NEON 飽和チューニング
           #    ・-fvectorize -fslp-vectorize: 3次元重力ベクトル演算を 128bit NEON で同時計算
-          #    ・-funroll-loops: A17 Pro の 6-wide デコードユニットを飽和させるループアンロール
-          #    ・-mllvm -align-all-nofallthru-blocks=5: L1D 境界跨ぎ（64B/16KiB Boundary Cross）を消滅
-          #    ・-mllvm -enable-strided-vectorization: 飛び石ツリーアクセス時の L1D キャッシュミスを抑制
-          A17_SIMD_L1D="-fvectorize -fslp-vectorize -funroll-loops -mllvm -align-all-nofallthru-blocks=5 -mllvm -enable-strided-vectorization"
+          #    ・-funroll-loops: 6-wide デコードユニットを飽和させるループアンロール
+          #    ・-fstrict-aliasing: Branchless (CSEL/FCSEL) 命令出力を最大化
+          A17_SIMD_L1D="-fvectorize -fslp-vectorize -funroll-loops -fstrict-aliasing"
           
-          # 4. L2 16MB 内完結 ThinLTO ＆ セーフティフラグ（-fmerge-all-constants は外して安全性を 100% 確保）
-          A17_LTO_OPTS="-flto=thin -fstrict-aliasing -fno-semantic-interposition"
+          # 4. L2 16MB 内完結 ThinLTO（ファイル境界を消滅させる）
+          A17_LTO_OPTS="-flto=thin"
           
           A17_ULTIMATE_FLAGS="$A17_ARCH $A17_PRECISION $A17_SIMD_L1D $A17_LTO_OPTS"
 
