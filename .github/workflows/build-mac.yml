@@ -1,4 +1,4 @@
-name: Build MilkyWay A17 Pro iOS Native
+name: Build MilkyWay A17 Pro iOS Native (GCD Dual-Core PoC)
 
 on:
   push:
@@ -13,12 +13,15 @@ jobs:
           uname -a
           clang --version
           xcrun --sdk iphoneos --show-sdk-path
+
       - name: Install Dependencies
         run: |
           brew install cmake autoconf automake libtool
+
       - name: Configure Git for Legacy Submodules
         run: |
           git config --global url."https://".insteadOf git://
+
       - name: Clone MilkyWay@home Source
         run: |
           git clone --depth 1 --recurse-submodules https://github.com/Milkyway-at-home/milkywayathome_client.git source
@@ -30,14 +33,14 @@ jobs:
           ln -sf "$(which glibtoolize)" "$HOME/bin/libtoolize"
           export PATH="$HOME/bin:$PATH"
           
-          python3 -c "
+          python3 -c '
           import os, re
-          dummy_code = '''
+          dummy_code = """
           #include <stdio.h>
           #include <stdlib.h>
           int callPosixSpawn(const char* cmd) { (void)cmd; return -1; }
           #ifdef __cplusplus
-          extern \"C\" {
+          extern "C" {
           #endif
               void PrintBacktrace(void) {}
               int compareOSVersionTo(int major, int minor, int bugFix) { 
@@ -46,63 +49,63 @@ jobs:
           #ifdef __cplusplus
           }
           #endif
-          '''
-          for root, dirs, files in os.walk('.'):
+          """
+          for root, dirs, files in os.walk("."):
               for file in files:
                   fpath = os.path.join(root, file)
-                  if '/mac/' in fpath or fpath.startswith('./mac/'):
-                      if file.endswith(('.cpp', '.c', '.m', '.mm')):
-                          with open(fpath, 'w', encoding='utf-8') as f:
+                  if "/mac/" in fpath or fpath.startswith("./mac/"):
+                      if file.endswith((".cpp", ".c", ".m", ".mm")):
+                          with open(fpath, "w", encoding="utf-8") as f:
                               f.write(dummy_code)
-          if os.path.exists('lib/procinfo_mac.cpp'):
-              with open('lib/procinfo_mac.cpp', 'a', encoding='utf-8') as f:
-                  f.write('\nchar *brandName[5] = {(char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\"};\n')
+          if os.path.exists("lib/procinfo_mac.cpp"):
+              with open("lib/procinfo_mac.cpp", "a", encoding="utf-8") as f:
+                  f.write("\nchar *brandName[5] = {(char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\", (char*)\"BOINC\"};\n")
           
-          if os.path.exists('lib/diagnostics.cpp'):
-              with open('lib/diagnostics.cpp', 'r', encoding='utf-8', errors='ignore') as f:
+          if os.path.exists("lib/diagnostics.cpp"):
+              with open("lib/diagnostics.cpp", "r", encoding="utf-8", errors="ignore") as f:
                   d_content = f.read()
-              d_content = d_content.replace('PrintBacktrace();', '// PrintBacktrace();')
-              with open('lib/diagnostics.cpp', 'w', encoding='utf-8') as f:
+              d_content = d_content.replace("PrintBacktrace();", "// PrintBacktrace();")
+              with open("lib/diagnostics.cpp", "w", encoding="utf-8") as f:
                   f.write(d_content)
-          for root, dirs, files in os.walk('.'):
+          for root, dirs, files in os.walk("."):
               for file in files:
-                  if file.endswith(('.cpp', '.c', '.h')):
+                  if file.endswith((".cpp", ".c", ".h")):
                       fpath = os.path.join(root, file)
-                      with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                      with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                           c = f.read()
-                      c = re.sub(r'#\s*include\s*<Carbon/', '// #include <Carbon/', c)
-                      c = re.sub(r'#\s*include\s*<CoreServices/', '// #include <CoreServices/', c)
-                      c = re.sub(r'#\s*include\s*<IOKit/', '// #include <IOKit/', c)
-                      c = c.replace('NXEventHandle', 'void*')
-                      with open(fpath, 'w', encoding='utf-8') as f:
+                      c = re.sub(r"#\s*include\s*<Carbon/", "// #include <Carbon/", c)
+                      c = re.sub(r"#\s*include\s*<CoreServices/", "// #include <CoreServices/", c)
+                      c = re.sub(r"#\s*include\s*<IOKit/", "// #include <IOKit/", c)
+                      c = c.replace("NXEventHandle", "void*")
+                      with open(fpath, "w", encoding="utf-8") as f:
                           f.write(c)
 
-          if os.path.exists('api/boinc_api.cpp'):
-              with open('api/boinc_api.cpp', 'r', encoding='utf-8', errors='ignore') as f:
+          if os.path.exists("api/boinc_api.cpp"):
+              with open("api/boinc_api.cpp", "r", encoding="utf-8", errors="ignore") as f:
                   c = f.read()
               
-              old_finish = 'int boinc_finish(int status) {'
-              new_finish = '''#ifdef __cplusplus
-              extern \"C\" {
+              old_finish = "int boinc_finish(int status) {"
+              new_finish = """#ifdef __cplusplus
+              extern "C" {
               #endif
               __attribute__((weak)) void nebula_force_exit(int status);
               #ifdef __cplusplus
               }
               #endif
               int boinc_finish(int status) {
-                  fprintf(stderr, \"[Nebula-Dylib] Intercepted boinc_finish(%d) -> Direct Escape!\\\\n\", status);
+                  fprintf(stderr, "[Nebula-Dylib] Intercepted boinc_finish(%d) -> Direct Escape!\\n", status);
                   fflush(stderr);
                   if (nebula_force_exit) {
                       nebula_force_exit(status);
                   }
                   exit(status);
-              '''
+              """
               if old_finish in c:
                   c = c.replace(old_finish, new_finish, 1)
               
-              old_frac = 'int boinc_fraction_done(double x) {'
-              new_frac = '''#ifdef __cplusplus
-              extern \"C\" {
+              old_frac = "int boinc_fraction_done(double x) {"
+              new_frac = """#ifdef __cplusplus
+              extern "C" {
               #endif
               __attribute__((weak)) void nebula_direct_progress(double x);
               #ifdef __cplusplus
@@ -110,12 +113,12 @@ jobs:
               #endif
               int boinc_fraction_done(double x) {
                   if (nebula_direct_progress) nebula_direct_progress(x);
-              '''
+              """
               if old_frac in c:
                   c = c.replace(old_frac, new_frac, 1)
-              with open('api/boinc_api.cpp', 'w', encoding='utf-8') as f:
+              with open("api/boinc_api.cpp", "w", encoding="utf-8") as f:
                   f.write(c)
-          "
+          '
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           ./_autosetup
           ./configure \
@@ -131,24 +134,105 @@ jobs:
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure MilkyWay CMake for dylib (A17 Pro Ultimate Architecture Tuning)
+      - name: Configure MilkyWay CMake for dylib (Apple Native GCD Dual-Core)
         run: |
           cd "$GITHUB_WORKSPACE/source"
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
-          python3 << 'EOF'
-          import os
-          ws = os.environ['GITHUB_WORKSPACE']
+          python3 -c '
+          import os, re
+          ws = os.environ["GITHUB_WORKSPACE"]
+
+          # 1. nbody_grav.c GCD Patch
+          fpath_grav = os.path.join(ws, "source/nbody/src/nbody_grav.c")
+          with open(fpath_grav, "r", encoding="utf-8") as f:
+              cg = f.read()
+
+          cg = "#include <dispatch/dispatch.h>\n" + cg
+
+          pattern = r"(static inline void nbMapForceBody\(const NBodyCtx\* ctx, NBodyState\* st\)\s*\{)[\s\S]*?(static mwvector nbGravity_Exact)"
           
-          # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
-          fpath = os.path.join(ws, 'source/nbody/src/nbody_orbit_integrator.c')
-          with open(fpath, 'r', encoding='utf-8') as f:
+          gcd_body = """static inline void nbMapForceBody(const NBodyCtx* ctx, NBodyState* st)
+          {
+              const int nbody = st->nbody;
+              mwvector LMCx = ZERO_VECTOR;
+              real lmcmass, lmcscale, lmcscale2;
+              int lmcfunction;
+
+              const Body* bodies = mw_assume_aligned(st->bodytab, 16);
+              mwvector* accels = mw_assume_aligned(st->acctab, 16);
+              real curTime = st->step * ctx->timestep;
+              real barTime = st->step * ctx->timestep - st->previousForwardTime;
+
+              if (ctx->LMC) {
+                  lmcfunction = (int)round(ctx->LMCfunction);
+                  LMCx = st->LMCpos;
+                  lmcmass = ctx->LMCmass;
+                  lmcscale = ctx->LMCscale;
+                  lmcscale2 = ctx->LMCscale2;
+              } else {
+                  SET_VECTOR(LMCx, 0.0, 0.0, 0.0);
+                  lmcfunction = 1;
+                  lmcmass = 0.0;
+                  lmcscale = 1.0;
+                  lmcscale2 = 1.0;
+              }
+
+              dispatch_apply(2, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t t_id) {
+                  int chunk_size = nbody / 2;
+                  int start_i = (int)t_id * chunk_size;
+                  int end_i = (t_id == 1) ? nbody : chunk_size;
+
+                  for (int i = start_i; i < end_i; ++i) {
+                      const Body* b = &bodies[i];
+                      mwvector a = ZERO_VECTOR;
+                      mwvector externAcc = ZERO_VECTOR;
+
+                      switch (ctx->potentialType) {
+                          case EXTERNAL_POTENTIAL_DEFAULT:
+                              a = nbGravity(ctx, st, b);
+                              externAcc = mw_addv(nbExtAcceleration(&ctx->pot, Pos(b), barTime),
+                                                  LMCAcceleration(lmcfunction, Pos(b), LMCx, lmcmass, lmcscale, lmcscale2));
+                              mw_incaddv(a, externAcc);
+                              accels[i] = a;
+                              break;
+                          case EXTERNAL_POTENTIAL_NONE:
+                              accels[i] = nbGravity(ctx, st, b);
+                              break;
+                          case EXTERNAL_POTENTIAL_CUSTOM_LUA:
+                              a = nbGravity(ctx, st, b);
+                              nbEvalPotentialClosure(st, Pos(b), &externAcc);
+                              mw_incaddv(externAcc, LMCAcceleration(lmcfunction, Pos(b), LMCx, lmcmass, lmcscale, lmcscale2));
+                              mw_incaddv(a, externAcc);
+                              accels[i] = a;
+                              break;
+                          default:
+                              mw_fail("Bad external potential type: %d\\n", ctx->potentialType);
+                      }
+                  }
+              });
+          }
+
+          """
+
+          new_cg, count = re.subn(pattern, gcd_body + r"\2", cg)
+          if count == 0:
+              print(">>> [FATAL] Failed to patch nbMapForceBody with GCD!")
+              exit(1)
+
+          with open(fpath_grav, "w", encoding="utf-8") as f:
+              f.write(new_cg)
+          print(">>> [SUCCESS] Successfully patched nbody_grav.c with Native Apple GCD!")
+
+          # 2. Preprocess Orbit Integrator Hook
+          fpath = os.path.join(ws, "source/nbody/src/nbody_orbit_integrator.c")
+          with open(fpath, "r", encoding="utf-8") as f:
               c = f.read()
-          for pattern in ['while (t < t_end)', 'while (t > t_end)']:
-              if pattern in c:
-                  pos = c.find(pattern)
-                  brace_pos = c.find('{', pos)
+          for p in ["while (t < t_end)", "while (t > t_end)"]:
+              if p in c:
+                  pos = c.find(p)
+                  brace_pos = c.find("{", pos)
                   if brace_pos != -1:
                       inject = """
                       static int step_cnt = 0;
@@ -162,18 +246,18 @@ jobs:
                           fflush(stderr);
                       }"""
                       c = c[:brace_pos+1] + inject + c[brace_pos+1:]
-                      with open(fpath, 'w', encoding='utf-8') as f:
+                      with open(fpath, "w", encoding="utf-8") as f:
                           f.write(c)
                       break
 
-          # ② 11万体の星の生成進捗
-          fpath2 = os.path.join(ws, 'source/nbody/src/nbody.c')
-          with open(fpath2, 'r', encoding='utf-8') as f:
+          # 3. Body generation progress
+          fpath2 = os.path.join(ws, "source/nbody/src/nbody.c")
+          with open(fpath2, "r", encoding="utf-8") as f:
               c2 = f.read()
-          for pattern in ['for (i = 0; i < n_bodies; i++)', 'for (i = 0; i < n_bodies; ++i)', 'for (int i = 0; i < n_bodies; i++)']:
-              if pattern in c2:
-                  pos = c2.find(pattern)
-                  brace_pos = c2.find('{', pos)
+          for p in ["for (i = 0; i < n_bodies; i++)", "for (i = 0; i < n_bodies; ++i)", "for (int i = 0; i < n_bodies; i++)"]:
+              if p in c2:
+                  pos = c2.find(p)
+                  brace_pos = c2.find("{", pos)
                   if brace_pos != -1:
                       inject = """
                       if (i % 20000 == 0) {
@@ -181,27 +265,28 @@ jobs:
                           fflush(stderr);
                       }"""
                       c2 = c2[:brace_pos+1] + inject + c2[brace_pos+1:]
-                      with open(fpath2, 'w', encoding='utf-8') as f:
+                      with open(fpath2, "w", encoding="utf-8") as f:
                           f.write(c2)
                       break
 
-          # ③ Lua の system() コール無効化
-          fpath3 = os.path.join(ws, 'source/lua/src/loslib.c')
-          with open(fpath3, 'r', encoding='utf-8') as f:
+          # 4. Lua system()
+          fpath3 = os.path.join(ws, "source/lua/src/loslib.c")
+          with open(fpath3, "r", encoding="utf-8") as f:
               c3 = f.read()
-          c3 = c3.replace('system(luaL_optstring(L, 1, NULL))', '-1')
-          with open(fpath3, 'w', encoding='utf-8') as f:
+          c3 = c3.replace("system(luaL_optstring(L, 1, NULL))", "-1")
+          with open(fpath3, "w", encoding="utf-8") as f:
               f.write(c3)
 
-          # ④ main() のエクスポート名変更
-          mpath = os.path.join(ws, 'source/nbody/src/main.c')
-          with open(mpath, 'r', encoding='utf-8') as f:
+          # 5. main() export rename
+          mpath = os.path.join(ws, "source/nbody/src/main.c")
+          with open(mpath, "r", encoding="utf-8") as f:
               m = f.read()
-          m = m.replace('int main(int argc, char **argv)', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
-          m = m.replace('int main(int argc, char *argv[])', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
-          with open(mpath, 'w', encoding='utf-8') as f:
+          m = m.replace("int main(int argc, char **argv)", "__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)")
+          m = m.replace("int main(int argc, char *argv[])", "__attribute__((visibility(\"default\"))) int milkyway_nbody_entry(int argc, char **argv)")
+          with open(mpath, "w", encoding="utf-8") as f:
               f.write(m)
-          EOF
+          print(">>> [SUCCESS] All patches applied successfully!")
+          '
 
           sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
           sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
@@ -210,25 +295,11 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          # ====================================================================
-          # ★ A17 Pro (Everest P-Core) 専用・超絶アーキテクチャ最適化
-          # ====================================================================
-          # 1. ハードウェア命令パイプライン整合 (128B Cacheline / 32B Loop Align)
-          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32"
-          
-          # 2. IEEE-754 精度完全維持 ＆ FMA / FSQRT 直撃
+          # A17 Pro (Everest P-Core) ネイティブ最適化（Blocks 有効化）
+          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fblocks -falign-functions=128 -falign-loops=32"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
-          
-          # 3. L1D Miss 削減 ＆ Advanced SIMD / NEON 飽和チューニング
-          #    ・-fvectorize -fslp-vectorize: 3次元重力ベクトル演算を 128bit NEON で同時計算
-          #    ・-funroll-loops: 6-wide デコードユニットを飽和させるループアンロール
-          #    ・-fstrict-aliasing: Branchless (CSEL/FCSEL) 命令出力を最大化
-          A17_SIMD_L1D="-fvectorize -fslp-vectorize -funroll-loops -fstrict-aliasing"
-          
-          # 4. L2 16MB 内完結 ThinLTO（ファイル境界を消滅させる）
-          A17_LTO_OPTS="-flto=thin"
-          
-          A17_ULTIMATE_FLAGS="$A17_ARCH $A17_PRECISION $A17_SIMD_L1D $A17_LTO_OPTS"
+          A17_SIMD="-fvectorize -fslp-vectorize -funroll-loops -fstrict-aliasing"
+          A17_FLAGS="$A17_ARCH $A17_PRECISION $A17_SIMD -flto=thin"
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -240,8 +311,8 @@ jobs:
             -DNBODY_OPENMP=OFF \
             -DNBODY_GL=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_ULTIMATE_FLAGS $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_ULTIMATE_FLAGS $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$A17_FLAGS $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A17_FLAGS $CLANG_PERMISSIVE"
 
       - name: Build MilkyWay N-Body dylib
         run: |
@@ -262,6 +333,7 @@ jobs:
           ls -lh "$DYLIB_FILE"
           file "$DYLIB_FILE"
           dwarfdump -u "$DYLIB_FILE" || otool -l "$DYLIB_FILE" | grep -A 2 LC_UUID
+
       - name: Upload A17 Pro dylib
         uses: actions/upload-artifact@v4
         if: success()
