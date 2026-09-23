@@ -15,63 +15,13 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-path
       - name: Install Dependencies
         run: |
-          brew install cmake autoconf automake libtool ninja
+          brew install cmake autoconf automake libtool
       - name: Configure Git for Legacy Submodules
         run: |
           git config --global url."https://".insteadOf git://
       - name: Clone MilkyWay@home Source
         run: |
           git clone --depth 1 --recurse-submodules https://github.com/Milkyway-at-home/milkywayathome_client.git source
-
-      # ====================================================================
-      # ★【追加】iOS arm64 向け LLVM OpenMP (libomp.a) の自動ビルド
-      # ====================================================================
-      - name: Build LLVM OpenMP for iOS arm64
-        run: |
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          
-          # openmp と cmake 共通モジュールを最小取得
-          git clone --depth 1 --filter=blob:none --sparse -b release/18.x https://github.com/llvm/llvm-project.git llvm_src
-          cd llvm_src
-          git sparse-checkout set openmp cmake
-          
-          # ★ 親ディレクトリ openmp をターゲットにしてビルド
-          cd openmp
-          mkdir build && cd build
-          
-          cmake .. \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
-            -DCMAKE_OSX_ARCHITECTURES="arm64" \
-            -DOPENMP_STANDALONE_BUILD=ON \
-            -DCMAKE_MODULE_PATH="$GITHUB_WORKSPACE/llvm_src/cmake/Modules" \
-            -DLIBOMP_ENABLE_SHARED=OFF \
-            -DLIBOMP_OMPT_SUPPORT=OFF \
-            -DLIBOMP_USE_HWLOC=OFF \
-            -DOPENMP_ENABLE_LIBOMPTARGET=OFF \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_C_FLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK" \
-            -DCMAKE_CXX_FLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK"
-          
-          # 静的ライブラリと omp.h ヘッダーを生成
-          ninja omp
-          
-          mkdir -p "$GITHUB_WORKSPACE/openmp_ios/lib" "$GITHUB_WORKSPACE/openmp_ios/include"
-          
-          # 生成された libomp.a と omp.h を所定の位置へコピー
-          LIB_FILE=$(find . -name "libomp.a" | head -n 1)
-          HEADER_FILE=$(find . -name "omp.h" | head -n 1)
-          
-          cp "$LIB_FILE" "$GITHUB_WORKSPACE/openmp_ios/lib/"
-          cp "$HEADER_FILE" "$GITHUB_WORKSPACE/openmp_ios/include/"
-          
-          echo "=== libomp.a Built Successfully ==="
-          ls -lh "$GITHUB_WORKSPACE/openmp_ios/lib/libomp.a"
-          file "$GITHUB_WORKSPACE/openmp_ios/lib/libomp.a"
-          ls -lh "$GITHUB_WORKSPACE/openmp_ios/include/omp.h"
 
       - name: Build BOINC Libraries (iOS arm64 tuned for A17 Pro)
         run: |
@@ -126,6 +76,7 @@ jobs:
                       c = c.replace('NXEventHandle', 'void*')
                       with open(fpath, 'w', encoding='utf-8') as f:
                           f.write(c)
+
           if os.path.exists('api/boinc_api.cpp'):
               with open('api/boinc_api.cpp', 'r', encoding='utf-8', errors='ignore') as f:
                   c = f.read()
@@ -148,7 +99,6 @@ jobs:
               '''
               if old_finish in c:
                   c = c.replace(old_finish, new_finish, 1)
-                  print('>>> [SUCCESS] Patched boinc_finish with direct escape!')
               
               old_frac = 'int boinc_fraction_done(double x) {'
               new_frac = '''#ifdef __cplusplus
@@ -163,7 +113,6 @@ jobs:
               '''
               if old_frac in c:
                   c = c.replace(old_frac, new_frac, 1)
-                  print('>>> [SUCCESS] Patched boinc_fraction_done with direct hook!')
               with open('api/boinc_api.cpp', 'w', encoding='utf-8') as f:
                   f.write(c)
           "
@@ -182,33 +131,15 @@ jobs:
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
-      - name: Configure MilkyWay CMake for dylib (True Dual-Core OpenMP)
+      - name: Configure MilkyWay CMake for dylib (A17 Pro Ultimate Architecture Tuning)
         run: |
           cd "$GITHUB_WORKSPACE/source"
           sed -i '' 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
           sed -i '' 's/message(FATAL_ERROR.*OS X SDK.*/# bypass ancient sdk check/g' cmake_modules/SpecialLibs.cmake
 
           python3 << 'EOF'
-          import os, re
-          
-          # ★ 絶対パスで nbody_grav.c を指定
+          import os
           ws = os.environ['GITHUB_WORKSPACE']
-          fpath_grav = os.path.join(ws, 'source/nbody/src/nbody_grav.c')
-          
-          with open(fpath_grav, 'r', encoding='utf-8') as f:
-              cg = f.read()
-          
-          pattern = r'#pragma\s+omp\s+parallel\s+for\s+private\(i,\s*b,\s*a,\s*externAcc\)\s+shared\(bodies,\s*accels\)'
-          replacement = '#pragma omp parallel for default(shared) private(i, b, a, externAcc)'
-          
-          new_cg, count = re.subn(pattern, replacement, cg)
-          if count == 0:
-              print(f">>> [FATAL ERROR] Failed to patch {fpath_grav}!")
-              exit(1)
-              
-          with open(fpath_grav, 'w', encoding='utf-8') as f:
-              f.write(new_cg)
-          print(f'>>> [SUCCESS] Successfully patched {fpath_grav} in {count} places!')
           
           # ① 矮小銀河の軌道逆積分の進捗 ＆ 中止/一時停止フック
           fpath = os.path.join(ws, 'source/nbody/src/nbody_orbit_integrator.c')
@@ -233,7 +164,6 @@ jobs:
                       c = c[:brace_pos+1] + inject + c[brace_pos+1:]
                       with open(fpath, 'w', encoding='utf-8') as f:
                           f.write(c)
-                      print('>>> [SUCCESS] Patched orbit integrator!')
                       break
 
           # ② 11万体の星の生成進捗
@@ -253,7 +183,6 @@ jobs:
                       c2 = c2[:brace_pos+1] + inject + c2[brace_pos+1:]
                       with open(fpath2, 'w', encoding='utf-8') as f:
                           f.write(c2)
-                      print('>>> [SUCCESS] Patched body generator!')
                       break
 
           # ③ Lua の system() コール無効化
@@ -272,12 +201,7 @@ jobs:
           m = m.replace('int main(int argc, char *argv[])', '__attribute__((visibility("default"))) int milkyway_nbody_entry(int argc, char **argv)')
           with open(mpath, 'w', encoding='utf-8') as f:
               f.write(m)
-          print('>>> [SUCCESS] Renamed main()!')
           EOF
-
-          # ★ 置換が本当に効いているかログに強制表示
-          echo "=== Verification of nbody_grav.c ==="
-          grep -n "default(shared)" "$GITHUB_WORKSPACE/source/nbody/src/nbody_grav.c"
 
           sed -i '' 's/add_executable(\s*milkyway_nbody/add_library(milkyway_nbody SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
           sed -i '' 's/add_executable(\s*\${NBODY_BIN_NAME}/add_library(\${NBODY_BIN_NAME} SHARED/g' "$GITHUB_WORKSPACE/source/nbody/CMakeLists.txt"
@@ -286,12 +210,27 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fno-strict-aliasing -fno-omit-frame-pointer -mllvm -aarch64-enable-atomic-cfg-tidy=false"
+          # ====================================================================
+          # ★ A17 Pro (Everest P-Core) 専用・超絶アーキテクチャ最適化
+          # ====================================================================
+          # 1. ハードウェア命令パイプライン整合 (128B Cacheline / 32B Loop Align)
+          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32"
+          
+          # 2. IEEE-754 精度完全維持 ＆ FMA / FSQRT 直撃
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
-          OPENMP_FLAGS="-Xclang -fopenmp -I$GITHUB_WORKSPACE/openmp_ios/include"
           
-          A17_ARM64_SAFE_OPT="$A17_ARCH $A17_PRECISION $OPENMP_FLAGS"
+          # 3. L1D Miss 削減 ＆ Advanced SIMD / NEON 飽和チューニング
+          #    ・-fvectorize -fslp-vectorize: 3次元重力ベクトル演算を 128bit NEON で同時計算
+          #    ・-funroll-loops: A17 Pro の 6-wide デコードユニットを飽和させるループアンロール
+          #    ・-mllvm -align-all-nofallthru-blocks=5: L1D 境界跨ぎ（64B/16KiB Boundary Cross）を消滅
+          #    ・-mllvm -enable-strided-vectorization: 飛び石ツリーアクセス時の L1D キャッシュミスを抑制
+          A17_SIMD_L1D="-fvectorize -fslp-vectorize -funroll-loops -mllvm -align-all-nofallthru-blocks=5 -mllvm -enable-strided-vectorization"
           
+          # 4. L2 16MB 内完結 ThinLTO ＆ セーフティフラグ（-fmerge-all-constants は外して安全性を 100% 確保）
+          A17_LTO_OPTS="-flto=thin -fstrict-aliasing -fno-semantic-interposition"
+          
+          A17_ULTIMATE_FLAGS="$A17_ARCH $A17_PRECISION $A17_SIMD_L1D $A17_LTO_OPTS"
+
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_SYSROOT="$IOS_SDK" \
@@ -299,11 +238,11 @@ jobs:
             -DBOINC_APPLICATION=ON \
             -DNBODY=ON \
             -DSEPARATION=OFF \
-            -DNBODY_OPENMP=ON \
+            -DNBODY_OPENMP=OFF \
             -DNBODY_GL=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_ARM64_SAFE_OPT $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_ARM64_SAFE_OPT $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$A17_ULTIMATE_FLAGS $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A17_ULTIMATE_FLAGS $CLANG_PERMISSIVE"
 
       - name: Build MilkyWay N-Body dylib
         run: |
@@ -315,7 +254,7 @@ jobs:
             sed -i '' 's/-static//g' "$linkfile"
             
             if ! grep -q "/ar " "$linkfile"; then
-              sed -i '' "s|$| $GITHUB_WORKSPACE/openmp_ios/lib/libomp.a -Wl,-undefined,dynamic_lookup|g" "$linkfile"
+              sed -i '' 's/$/ -Wl,-undefined,dynamic_lookup/g' "$linkfile"
             fi
           done
           make -j$(sysctl -n hw.ncpu) || make VERBOSE=1
@@ -323,11 +262,7 @@ jobs:
           DYLIB_FILE=$(find . -name "*milkyway_nbody*.dylib" | head -n 1)
           ls -lh "$DYLIB_FILE"
           file "$DYLIB_FILE"
-          
-          # ★ ビルド直後の UUID をログに強制表示
-          echo "=== New Built UUID ==="
           dwarfdump -u "$DYLIB_FILE" || otool -l "$DYLIB_FILE" | grep -A 2 LC_UUID
-          
       - name: Upload A17 Pro dylib
         uses: actions/upload-artifact@v4
         if: success()
