@@ -268,15 +268,12 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -falign-functions=128 -falign-loops=32"
+          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK"
           A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
-          
-          # クラッシュ回避のため -flto=thin に設定し、-inline-threshold=3000 を維持
-          A17_OPT_FLAGS="-funroll-loops -mllvm -inline-threshold=3000 -fmerge-all-constants -fstrict-aliasing"
-          A17_LTO="-flto=thin"
-          
           OPENMP_FLAGS="-Xclang -fopenmp -I$GITHUB_WORKSPACE/openmp_ios/include"
-          A17_FULL_OPT="$A17_ARCH $A17_PRECISION $A17_OPT_FLAGS $A17_LTO $OPENMP_FLAGS"
+          
+          # ポインタ破壊を招く LTO やインライン破壊を一切排除した「堅牢 2 コア構成」
+          A17_SAFE_OPT="$A17_ARCH $A17_PRECISION $OPENMP_FLAGS"
           
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -288,8 +285,8 @@ jobs:
             -DNBODY_OPENMP=ON \
             -DNBODY_GL=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_FULL_OPT $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_FULL_OPT $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$A17_SAFE_OPT $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A17_SAFE_OPT $CLANG_PERMISSIVE"
 
       - name: Build MilkyWay N-Body dylib
         run: |
