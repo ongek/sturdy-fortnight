@@ -278,6 +278,16 @@ jobs:
                       break
 
           # ③ Lua の system() コール無効化
+
+          fpath_crypt = os.path.join(ws, 'source/boinc/boinc/lib/crypt.cpp')
+          if os.path.exists(fpath_crypt):
+              with open(fpath_crypt, 'r', encoding='utf-8') as f:
+                  c4 = f.read()
+              c4 = c4.replace('subj = X509_get_subject_name(cert);', 'subj = (X509_NAME*)X509_get_subject_name(cert);')
+              with open(fpath_crypt, 'w', encoding='utf-8') as f:
+                  f.write(c4)
+              print('>>> [SUCCESS] boinc crypt.cpp patched for OpenSSL 3.x/4.x!')
+
           fpath_lua = os.path.join(ws, 'source/lua/src/loslib.c')
           with open(fpath_lua, 'r', encoding='utf-8') as f:
               c3 = f.read()
