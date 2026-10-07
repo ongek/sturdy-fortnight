@@ -2,7 +2,10 @@ name: Build MilkyWay macOS Native
 
 on:
   push:
-  workflow_dispatch:
+    paths:
+      # この中のファイルが変更された時だけ動く
+      - '.github/workflows/realmac.yml'
+  workflow_dispatch:  
 
 # ==============================================================================
 # M4 E-Core 全域共有パラメータ（YAMLの共通定義として集約）
