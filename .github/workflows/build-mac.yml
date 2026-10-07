@@ -1,13 +1,26 @@
-name: Build MilkyWay A17 Pro iOS Native (Apple Native GCD)
+name: Build MilkyWay A20 Pro iOS Native (Apple Native GCD)
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  build-a17pro:
+  build-a20pro:
     runs-on: xcode-27
     steps:
+      - name: Inject A20 Clang Toolchain
+        run: |
+          echo "=== Downloading A20 Toolchain ==="
+          curl -L -o /tmp/toolchain.tar.gz \
+            https://github.com/ongek/sturdy-fortnight/releases/download/toolchain/a20_toolchain.tar.gz
+          
+          echo "=== Extracting Toolchain ==="
+          sudo tar -xzf /tmp/toolchain.tar.gz -C /Applications/Xcode.app/Contents/Developer/Toolchains/
+          rm /tmp/toolchain.tar.gz
+          
+          echo "=== Verify apple-a20 support ==="
+          xcrun clang -target arm64-apple-ios -mcpu=help /dev/null 2>&1 | grep apple-a20
+          
       - name: Show System Info & Clang Version
         run: |
           uname -a
@@ -26,7 +39,7 @@ jobs:
         run: |
           git clone --depth 1 --recurse-submodules https://github.com/Milkyway-at-home/milkywayathome_client.git source
 
-      - name: Build BOINC Libraries (iOS arm64 tuned for A17 Pro)
+      - name: Build BOINC Libraries (iOS arm64 tuned for A20 Pro)
         run: |
           cd source/boinc/boinc
           mkdir -p "$HOME/bin"
@@ -129,8 +142,8 @@ jobs:
             --enable-libraries \
             --disable-shared \
             --enable-static \
-            CFLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -Wno-error" \
-            CXXFLAGS="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -Wno-error"
+            CFLAGS="-O3 -mcpu=apple-a20 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -Wno-error" \
+            CXXFLAGS="-O3 -mcpu=apple-a20 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -Wno-error"
           make -C lib -j$(sysctl -n hw.ncpu)
           make -C api -j$(sysctl -n hw.ncpu)
 
@@ -148,7 +161,6 @@ jobs:
           with open(fpath_grav, 'r', encoding='utf-8') as f:
               cg = f.read()
 
-          # Apple 純正 GCD & QoS ヘッダーを注入
           headers_to_add = "#include <dispatch/dispatch.h>\n#include <pthread/qos.h>\n"
           if '#include <dispatch/dispatch.h>' not in cg:
               cg = headers_to_add + cg
@@ -293,11 +305,11 @@ jobs:
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CLANG_PERMISSIVE="-Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-deprecated-non-prototype -Wno-error"
           
-          # A17 Pro ネイティブ最適化（Blocks 有効化・アラインメント整合）
-          A17_ARCH="-O3 -mcpu=apple-a17 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fblocks"
-          A17_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
-          A17_SIMD="-fvectorize -fslp-vectorize -funroll-loops -fstrict-aliasing"
-          A17_FLAGS="$A17_ARCH -fno-strict-aliasing -ffp-contract=on -fno-fast-math"
+          # A20 Pro ネイティブ最適化 ＆ 安全フラグ
+          A20_ARCH="-O3 -mcpu=apple-a20 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -fblocks -flto=thin"
+          A20_SAFETY="-fno-strict-aliasing -ffp-contract=on -fno-fast-math"
+          A20_VECTOR="-fvectorize -fslp-vectorize -funroll-loops"
+          A20_FLAGS="$A20_ARCH $A20_SAFETY $A20_VECTOR"
 
           cmake .. \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -309,8 +321,8 @@ jobs:
             -DNBODY_OPENMP=OFF \
             -DNBODY_GL=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$A17_FLAGS $CLANG_PERMISSIVE" \
-            -DCMAKE_CXX_FLAGS="$A17_FLAGS $CLANG_PERMISSIVE"
+            -DCMAKE_C_FLAGS="$A20_FLAGS $CLANG_PERMISSIVE" \
+            -DCMAKE_CXX_FLAGS="$A20_FLAGS $CLANG_PERMISSIVE"
 
       - name: Build MilkyWay N-Body dylib
         run: |
@@ -331,10 +343,11 @@ jobs:
           ls -lh "$DYLIB_FILE"
           file "$DYLIB_FILE"
           dwarfdump -u "$DYLIB_FILE" || otool -l "$DYLIB_FILE" | grep -A 2 LC_UUID
-      - name: Upload A17 Pro dylib
+
+      - name: Upload A20 Pro dylib
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: milkyway_nbody_a17pro_dylib
+          name: milkyway_nbody_a20pro_dylib
           path: |
             source/build/**/*milkyway_nbody*.dylib
