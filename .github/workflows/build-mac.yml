@@ -229,8 +229,8 @@ jobs:
           
           # 【完全復権】A20 Pro 最高性能フラグ（strict-aliasing & fast FMA 解禁）
           A20_ARCH="-O3 -mcpu=apple-a20 -target arm64-apple-ios27.0 -isysroot $IOS_SDK -flto=thin -falign-functions=128 -falign-loops=32"
-          A20_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=fast"
-          A20_SIMD="-fvectorize -fslp-vectorize -funroll-loops -fstrict-aliasing"
+          A20_PRECISION="-fno-math-errno -fno-trapping-math -ffp-contract=on"
+          A20_SIMD="-fvectorize -fslp-vectorize -funroll-loops -fno-strict-aliasing"
           A20_FLAGS="$A20_ARCH $A20_PRECISION $A20_SIMD"
 
           cmake .. \
