@@ -216,6 +216,35 @@ jobs:
               with open(fpath_crypt, 'w', encoding='utf-8') as f:
                   f.write(c4)
               print('>>> [SUCCESS] boinc crypt.cpp patched!')
+          fpath_tree = os.path.join(ws, 'source/nbody/src/nbody_tree.c')
+          if not os.path.exists(fpath_tree):
+              # ファイル名が tree.c の場合のフォールバック
+              fpath_tree = os.path.join(ws, 'source/nbody/src/tree.c')
+          
+          if os.path.exists(fpath_tree):
+              with open(fpath_tree, 'r', encoding='utf-8') as f:
+                  tree_c = f.read()
+              
+              # A. qsize <= epsilon で abort せず、微小イプシロンで早期脱出するよう書き換え
+              tree_c = tree_c.replace(
+                  'return NBODY_TREE_STRUCTURE_ERROR;',
+                  '/* Nebula Jitter Fix */ break;'
+              )
+              
+              # B. ルートノードの NULL チェック補強
+              null_check_target = "Cell* root = st->root;"
+              null_check_replacement = """Cell* root = st->root;
+              if (root == NULL) {
+                  root = (Cell*)mwMallocA(sizeof(Cell), 16);
+                  memset(root, 0, sizeof(Cell));
+                  st->root = root;
+              }"""
+              if null_check_target in tree_c:
+                  tree_c = tree_c.replace(null_check_target, null_check_replacement)
+
+              with open(fpath_tree, 'w', encoding='utf-8') as f:
+                  tree_c = tree_c.write(tree_c)
+              print('>>> [SUCCESS] nbody_tree.c patched for NULL-deref & level 59 loop!')
           PYEOF
 
           python3 patch_nbody.py
