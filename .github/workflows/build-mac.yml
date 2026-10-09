@@ -242,8 +242,8 @@ jobs:
               if null_check_target in tree_c:
                   tree_c = tree_c.replace(null_check_target, null_check_replacement)
 
-              with open(fpath_tree, 'w', encoding='utf-8') as f:
-                  tree_c = tree_c.write(tree_c)
+              with open(fpath_tree, "w", encoding="utf-8") as f:
+                f.write(tree_c)
               print('>>> [SUCCESS] nbody_tree.c patched for NULL-deref & level 59 loop!')
           PYEOF
 
